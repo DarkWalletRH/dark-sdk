@@ -1,0 +1,68 @@
+{
+  "name": "@darkwalletrh/dark-sdk",
+  "version": "0.3.2",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./react": "./dist/react.js",
+    "./disclosure": "./dist/disclosure.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
+  ],
+  "scripts": {
+    "gen": "node scripts/gen-public-inputs.mjs",
+    "build": "tsc",
+    "test": "node --import tsx --test test/*.test.ts",
+    "prepare": "npm run build"
+  },
+  "dependencies": {
+    "@noble/ciphers": "^1.3.0",
+    "@noble/curves": "^1.9.7",
+    "@noble/hashes": "^1.8.0"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "viem": "^2",
+    "@aztec/bb.js": "5.0.0-nightly.20260522",
+    "@noir-lang/noir_js": "1.0.0-beta.22"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    },
+    "viem": {
+      "optional": true
+    },
+    "@aztec/bb.js": {
+      "optional": true
+    },
+    "@noir-lang/noir_js": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^18.3.31",
+    "react": "^18.3.1",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "viem": "^2.21.0",
+    "@aztec/bb.js": "5.0.0-nightly.20260522",
+    "@noir-lang/noir_js": "1.0.0-beta.22"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DarkWalletRH/dark-sdk.git"
+  },
+  "homepage": "https://darkwallet.cash",
+  "bugs": {
+    "url": "https://github.com/DarkWalletRH/dark-sdk/issues"
+  }
+}

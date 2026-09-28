@@ -1,0 +1,55 @@
+{
+  "v": 1,
+  "vectors": [
+    {
+      "label": "sk=0x01 testnet",
+      "sk": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "chainId": 46630,
+      "s": "0x022172231d49f8a210e9d62fc5089c33efbf7ad65b646a4b1cf1d3f0b07d2dd6",
+      "px": "0x1f8e4ffd52b48598fee63d30a64b79853caa891f001c2942a27807b505bd1e77",
+      "py": "0x004831eb9cd4beae9b4d0345a3aaa49670a761ba0044a88c53b6a8fc923304a6",
+      "kAe": "0x4bea89e8b6bdc40e79ab8a5a34adf5faba4eb8a6df993c11bad6b06d9f86ce63",
+      "ctr": 0
+    },
+    {
+      "label": "sk=0x01 mainnet",
+      "sk": "0x0000000000000000000000000000000000000000000000000000000000000001",
+      "chainId": 4663,
+      "s": "0x02cd7e1386c21d9c6c231dba36f1e65f523a8de7e3ea1d92bf8a2d521f191920",
+      "px": "0x1753eaad455e03a533a996e139d9f0228cec9a3c93a81d38876f8402c00dd100",
+      "py": "0x1647bb759809f7b5edaba7c3762d2cc6b663e97e060c22aaa4544f159b73c4a8",
+      "kAe": "0xef56fed4563ce7a10e032f24158e8130199f175b3313b898b9c39c2b3347832f",
+      "ctr": 0
+    },
+    {
+      "label": "sk=0xff.. testnet",
+      "sk": "0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "chainId": 46630,
+      "s": "0x0b554b77a9ab7076a2e34b6f334b5326a0e9c76dd99307df032397aab1d3f56b",
+      "px": "0x12e6c91316432d65256db9d38380c5df6b44def9a170bf9571387c078dd0144e",
+      "py": "0x2b45a31022eb2c21d95beadbbe5f6caf93d5fe1e53e4055dd0aeee3d53789032",
+      "kAe": "0x18d28736fdf921a7b4601319965f20f5aeca99126291d2164dcf167075ac57c0",
+      "ctr": 0
+    },
+    {
+      "label": "sk=counting testnet",
+      "sk": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "chainId": 46630,
+      "s": "0x00cfa10c488ddd8a726fa3d2d1ebb258be81a3a5d683b8020f5f92e516728934",
+      "px": "0x0d77f9465aed6bfd3dc7a16c65dbf6093afdbce309e1f193c8ae9b361979bd4e",
+      "py": "0x01cec64909f341c20293083449055a9d699f1722d011b58cd62c5c45b3446a58",
+      "kAe": "0x557f629f445bf7d72516c85b4f7be6456fd16f5bfe6df3d56dcf8a624f33e298",
+      "ctr": 0
+    },
+    {
+      "label": "sk=counting mainnet",
+      "sk": "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "chainId": 4663,
+      "s": "0x149f8efecbbc83f4d3af49488ec67c0afa8a50f80a5f68c1b3fd8fa0fb4706e8",
+      "px": "0x2043190dcba53f16938fb8facfaf084852ef8d7b1a33052887e3e6fa85597909",
+      "py": "0x0fb7813b0db6dba0f60f92efbe13fa25393c9a1c91540592652f3e164aa37e85",
+      "kAe": "0x2e1bafa2b1864e4e3f01090f8bdf0afd16898bd88ecbfcce71a428b8b0ffe248",
+      "ctr": 0
+    }
+  ]
+}
