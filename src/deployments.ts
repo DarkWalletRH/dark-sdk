@@ -61,7 +61,18 @@ export const deployments: Record<number, Deployment> = {
   },
   [CHAIN_ID_MAINNET]: {
     ...UNDEPLOYED,
-    // The only real address so far: USDG on mainnet.
+    vault: '0xeD7a0c6899a6AC94Aea7A5b2F8f24a948042DA9C',
+    registry: '0x2E245135FD561965CC546c14C23C9162f36d9C87',
+    verifiers: {
+      register: '0xAf2332Ef3910A9328418b4963BA0E50b9d5846Fe',
+      transfer: '0x0905e66f00Bd3261A8E32Dc4b6Cb060a6B8A8f74',
+      withdraw: '0xaa921526C05b2F11204525D28A81391d91C4258a',
+    },
+    timelock: '0xADbF7E3cf5418BeAC10BcDD3BBD9a51dc19EBC54',
+    guardian: '0x87879CbAfC1E92528b950444E693D3b2F07CB1d7',
+    deployBlock: 75151289n,
+    // Launch deploy 2026-09-28: real USDG, beta caps, owner = timelock (owner Safe
+    // 0xD1A9…2305, 2-of-3), guardian = the guardian Safe (1-of-2).
     usdg: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
     rpcUrl: 'https://rpc.mainnet.chain.robinhood.com',
     explorer: 'https://robinhoodchain.blockscout.com', // explorer.mainnet.chain.robinhood.com 301s here; explorer.chain.robinhood.com serves no TLS (2026-09-20 sweep),

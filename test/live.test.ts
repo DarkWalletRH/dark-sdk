@@ -145,10 +145,6 @@ const client = (over: ChainOverrides = {}, prover: DarkProver = new FixtureDarkP
 
 test('an undeployed chain is NOT_DEPLOYED before anything else happens', async () => {
   await assert.rejects(
-    LiveDarkClient.create({ chainId: 4663, account: ACCOUNT, privateKey: SK, prover: new FixtureDarkProver() }),
-    (e: unknown) => isDarkError(e) && e.code === 'NOT_DEPLOYED',
-  );
-  await assert.rejects(
     LiveDarkClient.create({ chainId: 1, account: ACCOUNT, privateKey: SK, prover: new FixtureDarkProver() }),
     (e: unknown) => isDarkError(e) && e.code === 'NOT_DEPLOYED',
   );

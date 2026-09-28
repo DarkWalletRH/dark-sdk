@@ -75,20 +75,23 @@ test('FixtureDarkProver reports progress and returns a proof', async () => {
   assert.ok(r.ms >= 0);
 });
 
-test('testnet is deployed, mainnet is not', () => {
+test('testnet and mainnet (launch, 2026-09-28) are deployed; nothing else is', () => {
   assert.equal(isDeployed(46630), true);
-  assert.equal(isDeployed(4663), false);
+  assert.equal(isDeployed(4663), true);
   assert.equal(isDeployed(1), false);
-  // Every testnet address is set, distinct and non-zero, and the deploy block is pinned.
-  const t = deployments[46630];
-  const addrs = [t.vault, t.registry, t.usdg, t.timelock, t.guardian, t.verifiers.register, t.verifiers.transfer, t.verifiers.withdraw];
-  for (const a of addrs) assert.notEqual(a, ZERO_ADDRESS);
-  assert.equal(new Set(addrs).size, addrs.length);
-  assert.ok(t.deployBlock > 0n);
+  // Every address on both chains is set, distinct and non-zero, and the deploy block is pinned.
+  for (const id of [46630, 4663]) {
+    const t = deployments[id];
+    const addrs = [t.vault, t.registry, t.usdg, t.timelock, t.guardian, t.verifiers.register, t.verifiers.transfer, t.verifiers.withdraw];
+    for (const a of addrs) assert.notEqual(a, ZERO_ADDRESS, `chain ${id}`);
+    assert.equal(new Set(addrs).size, addrs.length, `chain ${id}`);
+    assert.ok(t.deployBlock > 0n, `chain ${id}`);
+  }
   // MockUSDG on testnet must never be the mainnet USDG.
+  const t = deployments[46630];
   assert.notEqual(t.usdg, '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168');
   assert.equal(deployments[4663].usdg, '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168');
-  assert.equal(deployments[4663].vault, ZERO_ADDRESS);
+  assert.equal(deployments[4663].vault, '0xeD7a0c6899a6AC94Aea7A5b2F8f24a948042DA9C');
   assert.equal(deployments[4663].betaNoticeState, 'pre_audit');
 });
 
