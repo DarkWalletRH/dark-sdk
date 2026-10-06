@@ -5,7 +5,7 @@ import { NodeDarkProver, FixtureDarkProver } from '../src/prover.ts';
 import { buildPublicInputs } from '../src/publicInputs.ts';
 import { buildRegisterWitness } from '../src/witness.ts';
 import { deriveDarkKeys } from '../src/keys.ts';
-import { cases } from './scenario.ts';
+import { cases, noCircuits } from './scenario.ts';
 import { deployments, isDeployed, darkVaultAbi, darkKeyRegistryAbi, ZERO_ADDRESS } from '../src/deployments.ts';
 
 const CHAIN_ID = 46630;
@@ -33,7 +33,7 @@ test('NodeDarkProver proves dark_register and re-derives its public inputs', { s
   assert.ok(r.ms > 0);
 });
 
-test('a witness whose public inputs the SDK cannot derive never reaches bb', async () => {
+test('a witness whose public inputs the SDK cannot derive never reaches bb', { skip: noCircuits }, async () => {
   await assert.rejects(
     prover.prove('dark_register', { s_lo: '0x1', s_hi: '0x0', chain_id: '1' }),
     (e: Error & { code?: string }) => e.code === 'PUBLIC_INPUT_MISMATCH',

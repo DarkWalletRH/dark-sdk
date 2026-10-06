@@ -16,7 +16,7 @@ import { isDarkError } from '../src/errors.ts';
 import {
   cases, CHAIN_ID, REGISTRY, VAULT, SENDER, RECIPIENT, WITHDRAW_TO, NONCE,
   MIN_TRANSFER, MAX_TRANSFER, BALANCE, AMOUNT, WITHDRAW_AMOUNT,
-  senderKeys, recipientKeys, availRho, avail, r, ct,
+  senderKeys, recipientKeys, availRho, avail, r, ct, noCircuits,
 } from './scenario.ts';
 
 // --- the committed prover files ------------------------------------------------------------
@@ -53,7 +53,7 @@ function flatten(w: Witness): Map<string, bigint> {
 
 
 for (const [crate, witness] of Object.entries(cases)) {
-  test(`${crate}: the witness equals the committed Prover.toml, value for value`, () => {
+  test(`${crate}: the witness equals the committed Prover.toml, value for value`, { skip: noCircuits }, () => {
     const want = readProverToml(crate);
     const got = flatten(witness);
     assert.deepEqual([...got.keys()].sort(), [...want.keys()].sort());

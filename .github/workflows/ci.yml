@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      # The prepare script builds dist/ during install; the explicit build below fails loudly on a type error.
+      - run: npm ci
+      - run: npm run build
+      # Prover tests skip themselves: nargo, bb and the Noir workspace live in dark-contracts.
+      - run: npm test

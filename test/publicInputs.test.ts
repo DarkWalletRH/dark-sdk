@@ -13,10 +13,11 @@ import {
   assertPublicInputsEqual,
 } from '../src/publicInputs.ts';
 import { isDarkError } from '../src/errors.ts';
+import { noCircuits } from './scenario.ts';
 
 const PKG = fileURLToPath(new URL('..', import.meta.url));
 
-test('the committed publicInputs.ts is what the generator produces today', () => {
+test('the committed publicInputs.ts is what the generator produces today', { skip: noCircuits }, () => {
   // Regenerate into a throwaway copy of the package so the working tree is untouched.
   const dir = mkdtempSync(join(tmpdir(), 'dark-pi-'));
   try {
@@ -36,7 +37,7 @@ test('the committed publicInputs.ts is what the generator produces today', () =>
   }
 });
 
-test('counts match §6 and circuits/manifest.json', () => {
+test('counts match §6 and circuits/manifest.json', { skip: noCircuits }, () => {
   assert.deepEqual(publicInputCount, {
     dark_register: 5,
     dark_transfer: 21,
@@ -90,7 +91,7 @@ test('assertPublicInputsEqual is case-insensitive but order-sensitive', () => {
   );
 });
 
-test('every circuit main() parameter list is mirrored here', () => {
+test('every circuit main() parameter list is mirrored here', { skip: noCircuits }, () => {
   // The Noir sources are the other half of the contract; a rename there must show up as a
   // public_inputs.toml change, which regenerates this file.
   const crates = { dark_register: 'register', dark_transfer: 'transfer', dark_withdraw: 'withdraw', dark_disclose_range: 'disclose_range' };

@@ -969,7 +969,7 @@ export class LiveDarkClient {
   }
 
   /**
-   * halve the range whenever the node refuses it (the 10,000-log cap).
+   * Halve the range whenever the node refuses it (the 10,000-log cap).
    *
    * Sequential, depth-capped, and it distinguishes a rate limit from a size refusal. The
    * previous version ran both halves through `Promise.all` and recursed without a limit, so one

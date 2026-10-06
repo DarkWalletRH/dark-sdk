@@ -6,6 +6,10 @@ import { encrypt, hedgedScalar, contextBytes, TAG_TRANSFER_R } from '../src/elga
 import {
   buildRegisterWitness, buildTransferWitness, buildWithdrawWitness, buildDiscloseRangeWitness,
 } from '../src/witness.ts';
+import { existsSync } from 'node:fs';
+
+/** The circuits/ workspace sits beside this package in the monorepo; a standalone checkout has none. */
+export const noCircuits = existsSync(new URL('../../../circuits/Nargo.toml', import.meta.url)) ? false : 'circuits/ workspace not present';
 
 // --- gen_prover.mjs's scenario, reproduced ------------------------------------------------
 const CHAIN_ID = 46630;
