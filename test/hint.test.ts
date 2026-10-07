@@ -94,3 +94,20 @@ test('a verified hint agrees with the ciphertext, and a lying one loses to BSGS'
   assert.ok(lie && !mul(G, lie.amount).equals(sub(C, mul(D[1], recipient.s))));
   assert.equal(decryptAmount(C, D[1], recipient.s, 25_000_000n), AMOUNT);
 });
+
+test('a dead CSPRNG does not repeat an AEAD nonce across different messages under one key', (t) => {
+  // §3 hedging: a stubbed or replayed getRandomValues must not mean keystream reuse under k_ae.
+  t.mock.method(crypto, 'getRandomValues', <T extends ArrayBufferView | null>(a: T) => a);
+  const nonce = (b: Uint8Array, at: number) => Buffer.from(b.subarray(at, at + 24)).toString('hex');
+  const sent = [AMOUNT, AMOUNT + 1n].map((a) => sealSenderHint(sender.kAe, tctx, a));
+  assert.notEqual(nonce(sent[0], 0), nonce(sent[1], 0), 'senderHint nonces repeat under k_ae');
+  const ae = [1n, 2n].map((v) => sealBalance(sender.kAe, { value: v, nonceAfter: 0n }, ctx));
+  assert.notEqual(nonce(ae[0], 0), nonce(ae[1], 0), 'aeBalance nonces repeat under k_ae');
+  assert.notEqual(nonce(ae[0], 0), nonce(sent[0], 0), 'aeBalance and senderHint share k_ae');
+  const hints = [AMOUNT, AMOUNT + 1n].map((a) => sealHint(kT, recipient.P, tctx, a));
+  assert.notEqual(nonce(hints[0], 64), nonce(hints[1], 64), 'hint nonces repeat under one k_h');
+  // Still the same wire format: the nonce rides in the blob, and openers are unchanged.
+  assert.equal(openSenderHint(sender.kAe, sent[1], tctx)?.amount, AMOUNT + 1n);
+  assert.deepEqual(openBalance(sender.kAe, ae[1], ctx), { value: 2n, nonceAfter: 0n });
+  assert.equal(openHint(hints[1], recipient.s, tctx)?.amount, AMOUNT + 1n);
+});

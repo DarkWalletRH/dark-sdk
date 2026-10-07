@@ -2,7 +2,7 @@
 // DarkClient (§6.7). Fixture mode only for now: real mode lands with the contracts.
 import { bytesToHex, hexToBytes, utf8ToBytes } from '@noble/hashes/utils';
 import { sha256 } from '@noble/hashes/sha2';
-import { DarkError } from './errors.ts';
+import { DarkError, isDarkError } from './errors.ts';
 import { deriveDarkKeys, checkRegistryKey, type DarkKeys } from './keys.ts';
 import { G, H, mul, decode, type AffinePoint, type Pt } from './grumpkin.ts';
 import {
@@ -52,8 +52,12 @@ export interface Balances {
   /**
    * §2: true while ANYONE watching the chain can compute the exact balance — i.e. while no stored
    * ciphertext carries randomness. A deposit adds `(x·G, identity)`, so a deposit-and-withdraw-only
-   * account stays public; the first confidential transfer **in or out** makes it false for good,
-   * because neither `transfer` nor `withdraw` ever removes randomness from `D`.
+   * account stays public; the first confidential transfer **in or out** normally makes it false,
+   * because neither `transfer` nor `withdraw` ever removes randomness from `D` on purpose.
+   *
+   * Not for good, though: a sender picks its own r, so a counterparty that supplied ALL of the
+   * randomness in `D` can send r' = n − r and cancel it. The flag is computed on available + pending
+   * for that reason, and turns true again when that happens; the protocol cannot prevent it today.
    *
    * False does not mean nobody knows it: a counterparty who knows the amount and the prior public
    * balance can still compute it. The copy must not say "only you" on the strength of this flag.
@@ -537,8 +541,15 @@ export interface LiveDarkClientOptions {
   api?: DarkApi;
   /**
    * Second source for recipient keys, which `transfer()` cross-checks before encrypting to one
-   * (§6.3): the chain's public RPC when `rpcUrl` points anywhere else, otherwise Dark's relay when
-   * `api` is set. `null` disables the check — for tests and single-RPC dev setups only.
+   * (§6.3). Every private send makes one `registry.keyOf(recipient)` read here, from the user's IP.
+   * Left undefined, the source contacted is:
+   * - `rpcUrl` is anything but the chain's public RPC (Dark's relay, a custom node) → the chain's
+   *   public RPC (Robinhood's endpoint), which then sees the recipient address;
+   * - `rpcUrl` IS the chain's public RPC and `api` is set → Dark's relay (`<api>/v1/rpc`), so Dark
+   *   still sees one recipient lookup per send even though the user picked the public RPC;
+   * - neither → no check.
+   * Pass a URL to choose the source yourself. `null` disables the check — for tests and single-RPC
+   * dev setups only.
    */
   keyCheckRpcUrl?: string | null;
   /** A ready client for the same purpose (tests); takes precedence over `keyCheckRpcUrl`. */
@@ -561,13 +572,29 @@ const ct = (c: { c: AffinePoint; d: AffinePoint }): Ciphertext => ({ c: point(c.
  * full-history log scan.
  */
 function isPublicBalance(s: Snapshot): boolean {
-  return s.account.available.d.is0() && s.account.pending.c.is0() && s.account.pending.d.is0();
+  // On the sum, which is what an observer can BSGS: a sole counterparty can send r' = n − r so that
+  // pending.D cancels available.D, and each half alone still looks randomised.
+  return ptAdd(s.account.available.d, s.account.pending.d).is0();
 }
 const hexBytes = (h: Hex): Uint8Array =>
   Uint8Array.from((h.slice(2).match(/../g) ?? []), (b) => parseInt(b, 16));
 const toHex = (b: Uint8Array): Hex => `0x${[...b].map((x) => x.toString(16).padStart(2, '0')).join('')}`;
 
-/** §13 `stale`: a nonce or `available` that moved under an in-flight proof, retried at most 3x. */
+/**
+ * §13 `stale`: a revert that means "the state under this proof moved" (a nonce or `available` that
+ * changed under an in-flight proof). The vault ABI carries no error items, so viem reports a custom
+ * error as its bare selector; match those as well as the names. The deployed bb verifiers never
+ * return false: a stale public input changes the transcript and reverts in the verifier with
+ * SumcheckFailed, so the vault's InvalidProof() is unreachable. ShpleminiFailed (reached only after
+ * the sumcheck passed) and PublicInputsLengthWrong (fixed per circuit) mean a bad proof or a
+ * vault/verifier mismatch, not stale state, and stay generic failures.
+ */
+const STALE_REVERT = new RegExp([
+  'PendingChanged', 'InvalidProof', 'nonce',
+  '0x6d3256ff', // PendingChanged(uint64,uint64)
+  '0x09bde339', // InvalidProof()
+  '0x9fc3a218', // SumcheckFailed()
+].join('|'), 'i');
 
 /**
  * The real `DarkClient` (§7). Every owner action walks the §13 states, re-derives its own
@@ -866,11 +893,15 @@ export class LiveDarkClient {
 
     const from = await this.lastApplyBlock(s.block);
     const logs = await this.logsFor('ConfidentialTransfer', { to: this.account }, from, s.block);
-    let total = 0n;
+    // One transfer that will not open (a garbage hint above a cap tightened later in its block, an
+    // RPC that hides a CapsUpdated) must not wedge the whole pending balance: it voids the walk,
+    // and the aggregate fallback below opens the total.
+    let total: bigint | null = 0n;
     for (const l of logs) {
-      total += await this.amountFromIncoming(l, s);
+      const a = await this.amountFromIncomingOrNull(l, s);
+      total = total === null || a === null ? null : total + a;
     }
-    if (mul(G, total).equals(target)) return total;
+    if (total !== null && mul(G, total).equals(target)) return total;
 
     // The per-transfer walk disagrees with the chain (a missing log, a lying sender we could not
     // bound): fall back to one BSGS over the aggregate, bounded by tvl.
@@ -907,6 +938,16 @@ export class LiveDarkClient {
       throw new DarkError('DECRYPTION_FAILED', 'an incoming transfer did not open under its block\'s maxTransfer');
     }
     return found;
+  }
+
+  /** `amountFromIncoming`, with an amount that will not open as `null` (unknown), not a throw. */
+  private async amountFromIncomingOrNull(log: DecodedLog, s: Snapshot): Promise<bigint | null> {
+    try {
+      return await this.amountFromIncoming(log, s);
+    } catch (e) {
+      if (isDarkError(e) && e.code === 'DECRYPTION_FAILED') return null;
+      throw e;
+    }
   }
 
   /** HARD_MAX_TRANSFER when no `CapsUpdated` covers that block (§7 step 5). */
@@ -950,12 +991,12 @@ export class LiveDarkClient {
       });
       // `null`, never 0n: a hint that will not open (corrupt event, format change, wrong k_ae) is an
       // amount we do not know, and showing it as a zero-value transfer is a quiet lie in the user's
-      // own history. The incoming path already verifies and throws rather than guessing.
+      // own history. The incoming path verifies too, and reports `null` rather than guessing.
       push(l, { kind: 'transfer_out', amount: opened?.amount ?? null, counterparty: a.to, amountPublic: false });
     }
     for (const l of incoming) {
       const a = l.args as { from: Address };
-      push(l, { kind: 'transfer_in', amount: await this.amountFromIncoming(l, { block: l.blockNumber ?? head } as Snapshot), counterparty: a.from, amountPublic: false });
+      push(l, { kind: 'transfer_in', amount: await this.amountFromIncomingOrNull(l, { block: l.blockNumber ?? head } as Snapshot), counterparty: a.from, amountPublic: false });
     }
     for (const l of applies) push(l, { kind: 'apply_pending', amount: 0n, amountPublic: false });
 
@@ -1295,7 +1336,10 @@ export class LiveDarkClient {
         // the same way every time and then surfaced as STALE_STATE anyway. Rebuilding
         // needs a fresh sync and a fresh proof, which only the caller can do, so say so plainly on
         // the first failure instead of pretending to recover.
-        if (/PendingChanged|InvalidProof|nonce/i.test(reason)) {
+        // The revert text only (shortMessage leaves out the call's arguments, which an address
+        // could spell a selector in), and never for register: its public inputs read no state.
+        const revertText = (e as { shortMessage?: string }).shortMessage ?? reason;
+        if (kind !== 'register' && STALE_REVERT.test(revertText)) {
           this.emit(kind, 'stale', { reason });
           throw new DarkError(
             'STALE_STATE',

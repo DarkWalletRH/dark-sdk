@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { LiveDarkClient, MULTICALL3, HARD_MAX_TRANSFER } from '../src/client.ts';
 import { FixtureDarkProver, type DarkProver, type ProofResult } from '../src/prover.ts';
 import { deriveDarkKeys } from '../src/keys.ts';
-import { G, H, mul, encode, Point } from '../src/grumpkin.ts';
+import { G, H, mul, encode, Point, GROUP_N } from '../src/grumpkin.ts';
 import { encrypt, hedgedScalar, contextBytes, TAG_TRANSFER_R, TAG_HINT_K } from '../src/elgamal.ts';
 import { sealBalance, sealHint, sealSenderHint } from '../src/hint.ts';
 import { deployments } from '../src/deployments.ts';
@@ -255,6 +255,19 @@ test('a deposit-only balance with a transfer still pending is not public', async
   assert.equal((await c.getBalances()).balancePublic, false, 'pending ciphertext is randomised');
 });
 
+test('a sole counterparty cancelling the randomness with r\' = n - r makes balancePublic true', async () => {
+  // The victim applied one transfer from the attacker (r1); the attacker's next one uses n - r1, so
+  // available.D + pending.D is the identity and anyone can BSGS the total before the victim applies.
+  const r1 = 0x1234567n;
+  const applied = encrypt(BALANCE + 1_000000n, [keys.P], r1);
+  const cancel = encrypt(1_000000n, [keys.P], GROUP_N - r1);
+  const { c } = await client({
+    available: { c: encode(applied.C), d: encode(applied.D[0]) }, aeBalance: '0x',
+    pending: { c: encode(cancel.C), d: encode(cancel.D[0]) }, pendingCount: 0n,
+  });
+  assert.equal((await c.getBalances()).balancePublic, true, 'the total is public; the flag must say so');
+});
+
 test('BSGS is bounded by tvl(), never tvlCap, so a tightened vault still opens', async () => {
   // tvl below the real balance is an unsound vault; the client says so instead of hanging.
   const { c } = await client({ aeBalance: '0x', tvl: 1n });
@@ -309,6 +322,39 @@ test('pending is the sum of verified hints since the last PendingApplied', async
     pending, pendingCount: 1n, logs: { ConfidentialTransfer: [lying], PendingApplied: [] },
   });
   assert.equal((await c2.getBalances()).pending, AMOUNT);
+});
+
+test('one poisoned hint above its block\'s cap does not wedge pending or history', async () => {
+  // A garbage-hint transfer lands ahead of a tightenCaps in the same block, so its per-transfer
+  // BSGS bound is below its real amount and it cannot open on its own.
+  const GOOD = 25_000000n;
+  const BAD = 50_000000n;
+  const ctxOf = (fromNonce: bigint) => ({ chainId: CHAIN_ID, vault: D.vault, from: PEER, to: ACCOUNT, fromNonce });
+  const r1 = hedgedScalar(TAG_TRANSFER_R, peerKeys.s, contextBytes(ctxOf(9n)));
+  const r2 = hedgedScalar(TAG_TRANSFER_R, peerKeys.s, contextBytes(ctxOf(10n)));
+  const k1 = hedgedScalar(TAG_HINT_K, peerKeys.s, contextBytes(ctxOf(9n)));
+  const enc = (v: bigint, r: bigint) => {
+    const e = encrypt(v, [peerKeys.P, keys.P], r);
+    const [C, Dr] = [encode(e.C), encode(e.D[1])];
+    return [C.x, C.y, 0n, 0n, Dr.x, Dr.y];
+  };
+  const sum = encrypt(GOOD + BAD, [peerKeys.P, keys.P], r1 + r2);
+  const pending = { c: encode(sum.C), d: encode(sum.D[1]) };
+  const block = D.deployBlock + 20n;
+  const logs = {
+    ConfidentialTransfer: [
+      { blockNumber: block - 1n, logIndex: 0, transactionHash: `0x${'21'.repeat(32)}`,
+        args: { from: PEER, to: ACCOUNT, fromNonceAfter: 10n, transferCt: enc(GOOD, r1), hint: toHex(sealHint(k1, keys.P, ctxOf(9n), GOOD)), senderHint: '0x' } },
+      { blockNumber: block, logIndex: 0, transactionHash: `0x${'22'.repeat(32)}`,
+        args: { from: PEER, to: ACCOUNT, fromNonceAfter: 11n, transferCt: enc(BAD, r2), hint: toHex(new Uint8Array(240).fill(0xee)), senderHint: '0x' } },
+    ],
+    CapsUpdated: [{ blockNumber: block, logIndex: 1, transactionHash: `0x${'23'.repeat(32)}`, args: { newCaps: { ...CAPS, maxTransfer: 1_000000n } } }],
+    PendingApplied: [],
+  };
+  const { c } = await client({ pending, pendingCount: 2n, logs });
+  assert.equal((await c.getBalances()).pending, GOOD + BAD, 'the aggregate fallback opens the total');
+  const h = await c.history();
+  assert.deepEqual(h.map((e) => e.amount), [GOOD, null], 'the bad transfer is reported as unknown, not thrown');
 });
 
 // --- §7 step 6 history -------------------------------------------------------------------
@@ -394,6 +440,29 @@ test('withdraw walks building -> proving -> simulating -> submitted -> final', a
   assert.equal(args[0], 10_000000n);
   assert.equal(args[1], PEER);
   assert.equal((args[3] as string).length, 2 + 56 * 2, 'aeBalance must be 56 bytes');
+});
+
+test('a verifier revert (they never return false) is classified as stale state, not a generic failure', async () => {
+  const { ContractFunctionRevertedError } = await import('viem');
+  for (const data of ['0x9fc3a218', '0x09bde339', '0x6d3256ff'] as const) {
+    const events: { kind: string; state: string }[] = [];
+    const { c, pub } = await client({}, new FixtureDarkProver(), events);
+    pub.simulateContract = async () => {
+      throw new ContractFunctionRevertedError({ abi: [], data, functionName: 'withdraw' });
+    };
+    await assert.rejects(c.withdraw(10_000000n, PEER), (e: unknown) => isDarkError(e) && /state that has since moved/.test(e.message), data);
+    assert.ok(events.some((e) => e.state === 'stale'), `${data} must emit stale`);
+  }
+  // A bad proof or a vault/verifier mismatch is not stale state: retrying after a sync cannot help.
+  for (const data of ['0xa5d82e8a', '0xfa066593'] as const) {
+    const events: { kind: string; state: string }[] = [];
+    const { c, pub } = await client({}, new FixtureDarkProver(), events);
+    pub.simulateContract = async () => {
+      throw new ContractFunctionRevertedError({ abi: [], data, functionName: 'withdraw' });
+    };
+    await assert.rejects(c.withdraw(10_000000n, PEER), (e: unknown) => isDarkError(e) && !/state that has since moved/.test(e.message), data);
+    assert.ok(events.some((e) => e.state === 'reverted'), `${data} must emit reverted`);
+  }
 });
 
 test('a prover that returns different public inputs is rejected, proof unused', async () => {

@@ -2,6 +2,8 @@
 // aeBalance, the owner-only balance hint (§6.3).
 // 56 B = nonce(24) || XChaCha20-Poly1305(k_ae, u64be(value) || u64be(nonceAfter), AAD).
 import { xchacha20poly1305 } from '@noble/ciphers/chacha';
+import { hmac } from '@noble/hashes/hmac';
+import { sha256 } from '@noble/hashes/sha2';
 import { addressBytes, concatBytes } from './elgamal.ts';
 import { u64be } from './keys.ts';
 
@@ -9,6 +11,19 @@ const AE_AAD_TAG = new TextEncoder().encode('DARK-CB-1/ae/v1');
 
 export const AE_BALANCE_BYTES = 56;
 const NONCE_BYTES = 24;
+const NONCE_TAG = new TextEncoder().encode('DARK-CB-1/aead-nonce/v1');
+
+/**
+ * Hedged AEAD nonce, like r and k (§3 "Randomness"): HMAC-SHA256(key, tag || 32 fresh CSPRNG bytes
+ * || AAD || plaintext), truncated to 24 B. With a dead or replayed CSPRNG a raw draw repeats under
+ * the long-lived k_ae across every aeBalance and senderHint, which is keystream reuse; this one
+ * still differs whenever the message does. Not a wire change: the nonce travels in the blob and
+ * openers never recompute it.
+ */
+function hedgedNonce(key: Uint8Array, aad: Uint8Array, pt: Uint8Array): Uint8Array {
+  const rand = crypto.getRandomValues(new Uint8Array(32));
+  return hmac(sha256, key, concatBytes(NONCE_TAG, rand, aad, pt)).subarray(0, NONCE_BYTES);
+}
 
 /** The account whose balance this hint describes. */
 export interface AeContext {
@@ -29,19 +44,20 @@ export interface BalanceHint {
 
 /**
  * Seal the post-state balance. `nonce` is exposed only so tests and vectors can
- * pin a value; production always takes the random default.
+ * pin a value; production always takes the hedged default.
  */
 export function sealBalance(
   kAe: Uint8Array,
   hint: BalanceHint,
   ctx: AeContext,
-  nonce: Uint8Array = crypto.getRandomValues(new Uint8Array(NONCE_BYTES)),
+  nonce?: Uint8Array,
 ): Uint8Array {
   if (kAe.length !== 32) throw new Error('sealBalance: k_ae must be 32 bytes');
-  if (nonce.length !== NONCE_BYTES) throw new Error('sealBalance: nonce must be 24 bytes');
+  if (nonce && nonce.length !== NONCE_BYTES) throw new Error('sealBalance: nonce must be 24 bytes');
   if (hint.value < 0n || hint.value >= 1n << 64n) throw new Error('sealBalance: value out of u64');
   if (hint.nonceAfter < 0n || hint.nonceAfter >= 1n << 64n) throw new Error('sealBalance: nonceAfter out of u64');
   const pt = concatBytes(u64be(hint.value), u64be(hint.nonceAfter));
+  nonce ??= hedgedNonce(kAe, aeAad(ctx), pt);
   const ct = xchacha20poly1305(kAe, nonce, aeAad(ctx)).encrypt(pt);
   return concatBytes(nonce, ct);
 }
@@ -69,7 +85,6 @@ export function openBalance(kAe: Uint8Array, blob: Uint8Array, ctx: AeContext): 
 // mismatch, falls back to a bounded BSGS (§7 step 5). A lying sender costs a sub-second search.
 
 import { hkdf } from '@noble/hashes/hkdf';
-import { sha256 } from '@noble/hashes/sha2';
 import { H, mul, pointBytes, decode, encode, type Pt } from './grumpkin.ts';
 import { invModN } from './keys.ts';
 import { contextBytes, type TransferContext } from './elgamal.ts';
@@ -118,12 +133,14 @@ export function sealHint(
   ctx: TransferContext,
   amount: bigint,
   note = '',
-  nonce: Uint8Array = crypto.getRandomValues(new Uint8Array(NONCE_BYTES)),
+  nonce?: Uint8Array,
 ): Uint8Array {
   const info = contextBytes(ctx);
   const Re = mul(H, k);
-  const ct = xchacha20poly1305(hintKey(mul(recipientKey, k), info), nonce, info)
-    .encrypt(notePlaintext(amount, note));
+  const kh = hintKey(mul(recipientKey, k), info);
+  const pt = notePlaintext(amount, note);
+  nonce ??= hedgedNonce(kh, info, pt);
+  const ct = xchacha20poly1305(kh, nonce, info).encrypt(pt);
   const { x, y } = encode(Re);
   return concatBytes(toBytes32BE(x), toBytes32BE(y), nonce, ct);
 }
@@ -147,10 +164,12 @@ export function sealSenderHint(
   ctx: TransferContext,
   amount: bigint,
   note = '',
-  nonce: Uint8Array = crypto.getRandomValues(new Uint8Array(NONCE_BYTES)),
+  nonce?: Uint8Array,
 ): Uint8Array {
   const info = contextBytes(ctx);
-  return concatBytes(nonce, xchacha20poly1305(kAe, nonce, info).encrypt(notePlaintext(amount, note)));
+  const pt = notePlaintext(amount, note);
+  nonce ??= hedgedNonce(kAe, info, pt);
+  return concatBytes(nonce, xchacha20poly1305(kAe, nonce, info).encrypt(pt));
 }
 
 export function openSenderHint(kAe: Uint8Array, blob: Uint8Array, ctx: TransferContext): TransferNote | null {

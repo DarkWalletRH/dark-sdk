@@ -54,8 +54,6 @@ async function node(): Promise<NodeApi> {
   return nodeApi;
 }
 
-let tmpCounter = 0;
-
 /**
  * Native prover (§7): `nargo execute` for the witness, `bb prove` for the proof, with the
  * flags circuits/tools/build.mjs proves work against the deployed verifiers.
@@ -101,22 +99,24 @@ export class NodeDarkProver implements DarkProver {
     onProgress?.(0.1, 'witness');
 
     const acir = path.join(circuitsDir, 'target', `${circuitId}.json`);
-    const name = `.dark-prove-${process.pid}-${++tmpCounter}`;
-    const proverFile = path.join(circuitsDir, crate, `${name}.toml`);
-    const witnessFile = path.join(circuitsDir, 'target', `${name}.gz`);
+    // CRYPTO-02: both files nargo touches hold the whole witness, s_lo/s_hi included, so both live
+    // in a mkdtemp dir (0700) from creation to deletion. The prover TOML used to sit in the crate
+    // dir and the solved witness in `circuits/target/` at the process umask (typically 0644), where
+    // anyone who could traverse the bundled circuits could copy it while bb ran. nargo joins
+    // WITNESS_NAME and --prover-name onto its own dirs, so an absolute path lands them here.
     const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dark-prove-'));
+    const base = path.join(outDir, 'witness');
+    const proverFile = `${base}.toml`;
+    const witnessFile = `${base}.gz`;
     try {
-      // 0600, because this file contains the account's spending key.
-      //
-      // `witnessToToml` serialises the whole witness, and that includes the ElGamal secret scalar
-      // as s_lo/s_hi. nargo requires the prover file to sit in the crate directory, so it cannot be
-      // moved into the private temp dir the proof output uses — but it can at least not be
-      // world-readable. Without the mode it lands at the process umask, typically 0644.
+      // 0600 as well, because this file contains the account's spending key.
       //
       // This is not a theoretical path: `dark-exit` uses NodeDarkProver by default, so it runs when
       // someone is rescuing their funds with Dark's servers gone or untrusted.
       fs.writeFileSync(proverFile, witnessToToml(witness as Witness, `# ${circuitId} witness from @darkwalletrh/dark-sdk.`), { mode: 0o600 });
-      await this.run(execFile, nargo, ['execute', name, '-p', name, '--package', circuitId, '--silence-warnings'], path.join(circuitsDir, crate));
+      await this.run(execFile, nargo, ['execute', base, '-p', base, '--package', circuitId, '--silence-warnings'], path.join(circuitsDir, crate));
+      // nargo writes it at the umask; the dir already hides it, the file mode now does too.
+      fs.chmodSync(witnessFile, 0o600);
       onProgress?.(0.3, 'proving');
 
       await this.run(execFile, bb, [

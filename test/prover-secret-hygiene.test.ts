@@ -21,6 +21,16 @@ test('the prover file is written 0600', () => {
   assert.match(write[0], /mode:\s*0o600/, 'the witness holds the spending key and must not be world-readable');
 });
 
+test('the prover TOML and the solved witness both live only in the 0700 mkdtemp dir', () => {
+  // The solved witness carries s too; nargo used to write it to circuits/target/ at the umask.
+  assert.match(source, /const base = path\.join\(outDir,/, 'both files must be created inside the private temp dir');
+  assert.match(source, /const proverFile = `\$\{base\}\.toml`/);
+  assert.match(source, /const witnessFile = `\$\{base\}\.gz`/);
+  assert.match(source, /'execute', base, '-p', base,/, 'nargo must be pointed at that dir, not the crate or target dir');
+  assert.ok(source.indexOf('mkdtempSync') < source.indexOf('fs.writeFileSync(proverFile'), 'the dir must exist before any secret is written');
+  // The real end-to-end check is prover.test.ts, which proves through this path when nargo and bb are installed.
+});
+
 test('the prover and witness files are overwritten before being unlinked', () => {
   const cleanup = source.slice(source.indexOf('} finally {'));
   assert.match(cleanup, /writeFileSync\(f,\s*Buffer\.alloc/, 'rmSync alone leaves the plaintext bytes on disk');

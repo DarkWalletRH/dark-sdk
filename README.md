@@ -44,7 +44,7 @@ The package is consumed from source. Installing from the repository builds `dist
 Pin a release tag:
 
 ```bash
-npm install github:DarkWalletRH/dark-sdk#v0.4.2 viem
+npm install github:DarkWalletRH/dark-sdk#v0.4.3 viem
 ```
 
 ### Peer dependencies
@@ -159,7 +159,8 @@ addresses for every Dark client. `isDeployed(chainId)` gates every live flow.
 
 | Version | Changes |
 |---|---|
-| **0.4.2** (latest) | Security: `transfer()` cross-checks the recipient key against a second RPC source before encrypting to it (new error `RPC_DISAGREEMENT`; options `keyCheckRpcUrl` / `keyCheckClient`). `newDisclosureId` never produces a mainnet id that looks like a testnet one. |
+| **0.4.3** (latest) | Robustness and hardening: one incoming transfer that will not open no longer blocks the balance, history or dark-exit (the pending total is recovered by bounded search and that transfer shows no amount); the solved witness lives only in an owner-only temp directory while proving; AEAD nonces are hedged so a broken random generator cannot repeat one; `balancePublic` also accounts for pending; a stale proof revert is classified as stale state. No API changes. |
+| 0.4.2 | Security: `transfer()` cross-checks the recipient key against a second RPC source before encrypting to it (new error `RPC_DISAGREEMENT`; options `keyCheckRpcUrl` / `keyCheckClient`). `newDisclosureId` never produces a mainnet id that looks like a testnet one. |
 | 0.4.1 | Documentation and test hygiene. Tests that cross-check the Noir workspace skip when it is absent, so the suite runs standalone. No API or protocol changes. |
 | 0.4.0 | Adds the Robinhood Chain mainnet deployment (chain `4663`) to `deployments`. No API changes. |
 | 0.3.2 | First release in this repository. Testnet deployment only; on 0.3.2, `isDeployed(4663)` is `false`. |
