@@ -128,7 +128,7 @@ export function sealHint(
   return concatBytes(toBytes32BE(x), toBytes32BE(y), nonce, ct);
 }
 
-/** The recipient recomputes K = (s_r^-1 mod n) * R_e. Returns null on any failure (§19 K9). */
+/** The recipient recomputes K = (s_r^-1 mod n) * R_e. Returns null on any failure (§19). */
 export function openHint(blob: Uint8Array, s: bigint, ctx: TransferContext): TransferNote | null {
   if (blob.length !== HINT_BYTES) return null;
   try {

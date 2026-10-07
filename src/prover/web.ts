@@ -161,7 +161,7 @@ export class WebDarkProver implements DarkProver {
     };
     const backend = new UltraHonkBackend(acir.bytecode, this.api);
 
-    // `verifierTarget: 'evm'` must match how the deployed verifiers were built (§18b W12). bb.js's
+    // `verifierTarget: 'evm'` must match how the deployed verifiers were built (§18b). bb.js's
     // older `keccak: true` means keccak AND ZK disabled, which is a different setting and silently
     // produces proofs the on-chain verifier rejects.
     const { proof, publicInputs } = await backend.generateProof(solved, { verifierTarget: 'evm' });

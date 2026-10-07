@@ -13,7 +13,7 @@ import {
   assertPublicInputsEqual,
 } from '../src/publicInputs.ts';
 import { isDarkError } from '../src/errors.ts';
-import { noCircuits } from './scenario.ts';
+import { CIRCUITS, noCircuits } from './scenario.ts';
 
 const PKG = fileURLToPath(new URL('..', import.meta.url));
 
@@ -21,14 +21,14 @@ test('the committed publicInputs.ts is what the generator produces today', { ski
   // Regenerate into a throwaway copy of the package so the working tree is untouched.
   const dir = mkdtempSync(join(tmpdir(), 'dark-pi-'));
   try {
-    cpSync(join(PKG, 'scripts'), join(dir, 'packages/dark-sdk/scripts'), { recursive: true });
-    cpSync(join(PKG, 'src'), join(dir, 'packages/dark-sdk/src'), { recursive: true });
-    cpSync(join(PKG, '../../circuits/public_inputs.toml'), join(dir, 'circuits/public_inputs.toml'));
-    execFileSync(process.execPath, [join(dir, 'packages/dark-sdk/scripts/gen-public-inputs.mjs')], {
+    cpSync(join(PKG, 'scripts'), join(dir, 'scripts'), { recursive: true });
+    cpSync(join(PKG, 'src'), join(dir, 'src'), { recursive: true });
+    execFileSync(process.execPath, [join(dir, 'scripts/gen-public-inputs.mjs')], {
       stdio: 'ignore',
+      env: { ...process.env, DARK_CIRCUITS_DIR: CIRCUITS },
     });
     assert.equal(
-      readFileSync(join(dir, 'packages/dark-sdk/src/publicInputs.ts'), 'utf8'),
+      readFileSync(join(dir, 'src/publicInputs.ts'), 'utf8'),
       readFileSync(join(PKG, 'src/publicInputs.ts'), 'utf8'),
       'src/publicInputs.ts is stale: run `node scripts/gen-public-inputs.mjs` and commit',
     );
@@ -44,7 +44,7 @@ test('counts match §6 and circuits/manifest.json', { skip: noCircuits }, () => 
     dark_withdraw: 12,
     dark_disclose_range: 9,
   });
-  const manifest = JSON.parse(readFileSync(join(PKG, '../../circuits/manifest.json'), 'utf8'));
+  const manifest = JSON.parse(readFileSync(join(CIRCUITS, 'manifest.json'), 'utf8'));
   for (const [pkg, m] of Object.entries<{ public_input_count: number; onchain: boolean }>(manifest.circuits)) {
     assert.equal(m.public_input_count, publicInputCount[pkg as keyof typeof publicInputCount], pkg);
     assert.equal(m.onchain, publicInputOnchain[pkg as keyof typeof publicInputOnchain], pkg);
@@ -54,7 +54,7 @@ test('counts match §6 and circuits/manifest.json', { skip: noCircuits }, () => 
 test('buildPublicInputs pads addresses and points into bytes32, in order', () => {
   const words = buildPublicInputs('dark_register', {
     chain_id: 46630,
-    registry: '0x00000000000000000000000000000000000000CE', // any address; see the 2026-09-20 sweep
+    registry: '0x00000000000000000000000000000000000000CE', // a placeholder, not a deployment
     account: '0x000000000000000000000000000000000000beef',
     pk: { x: 1n, y: 2n },
   });
@@ -96,7 +96,7 @@ test('every circuit main() parameter list is mirrored here', { skip: noCircuits 
   // public_inputs.toml change, which regenerates this file.
   const crates = { dark_register: 'register', dark_transfer: 'transfer', dark_withdraw: 'withdraw', dark_disclose_range: 'disclose_range' };
   for (const [pkg, crate] of Object.entries(crates)) {
-    const src = readFileSync(join(PKG, `../../circuits/${crate}/src/main.nr`), 'utf8');
+    const src = readFileSync(join(CIRCUITS, crate, 'src/main.nr'), 'utf8');
     const sig = src.slice(src.indexOf('fn main('), src.indexOf(') {', src.indexOf('fn main(')));
     const names = [...sig.matchAll(/(\w+):\s*pub\s+(\w+)/g)].flatMap(([, name, ty]) =>
       ty === 'EmbeddedCurvePoint' ? [`${name}.x`, `${name}.y`] : [name],

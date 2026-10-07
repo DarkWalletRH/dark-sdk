@@ -5,7 +5,7 @@
 //
 // Encoding: every scalar (`s`, `r`) is a 128-bit lo/hi limb pair, because the Grumpkin group
 // order n is larger than Noir's Field modulus (§6, §19). Points are (x, y) with the (0,0)
-// identity sentinel (§19 X1).
+// identity sentinel (§19).
 import { DarkError } from './errors.ts';
 import { G, H, GROUP_N, add, mul, sub, encode, type Pt } from './grumpkin.ts';
 import { MAX_AMOUNT, decryptToPoint, type Ciphertext } from './elgamal.ts';
@@ -50,7 +50,7 @@ function field(name: string, v: bigint | number): string {
   return hex(n);
 }
 
-// --- C1 dark_register ------------------------------------------------------------------------
+// --- dark_register ---------------------------------------------------------------------------
 
 export interface RegisterWitnessArgs {
   chainId: number;
@@ -62,7 +62,7 @@ export interface RegisterWitnessArgs {
   pk: Pt;
 }
 
-/** Knowledge of the s behind this key: s * pk == H (§6 C1). */
+/** Knowledge of the s behind this key: s * pk == H (§6). */
 export function buildRegisterWitness(a: RegisterWitnessArgs): Witness {
   if (!mul(a.pk, a.s).equals(H)) bad('s * pk != H (key derivation and registry key disagree)');
   return {
@@ -74,7 +74,7 @@ export function buildRegisterWitness(a: RegisterWitnessArgs): Witness {
   };
 }
 
-// --- C2 dark_transfer ------------------------------------------------------------------------
+// --- dark_transfer ---------------------------------------------------------------------------
 
 export interface TransferWitnessArgs {
   chainId: number;
@@ -101,7 +101,7 @@ export interface TransferWitnessArgs {
 }
 
 /**
- * Spend proof (§6 C2). Every circuit relation is re-checked here first: a mismatch that would
+ * Spend proof (§6). Every circuit relation is re-checked here first: a mismatch that would
  * make `nargo execute` fail after 3 s of proving is caught in microseconds instead.
  */
 export function buildTransferWitness(a: TransferWitnessArgs): Witness {
@@ -140,7 +140,7 @@ export function buildTransferWitness(a: TransferWitnessArgs): Witness {
   };
 }
 
-// --- C3 dark_withdraw ------------------------------------------------------------------------
+// --- dark_withdraw ---------------------------------------------------------------------------
 
 export interface WithdrawWitnessArgs {
   chainId: number;
@@ -156,7 +156,7 @@ export interface WithdrawWitnessArgs {
   avail: Ciphertext;
 }
 
-/** Exit proof (§6 C3). `to` is binding: the proof is only good for that recipient. */
+/** Exit proof (§6). `to` is binding: the proof is only good for that recipient. */
 export function buildWithdrawWitness(a: WithdrawWitnessArgs): Witness {
   if (!mul(a.pk, a.s).equals(H)) bad('s * pk != H');
   if (a.amount <= 0n) bad('withdraw amount is zero');
@@ -180,7 +180,7 @@ export function buildWithdrawWitness(a: WithdrawWitnessArgs): Witness {
   };
 }
 
-// --- C4 dark_disclose_range ------------------------------------------------------------------
+// --- dark_disclose_range ---------------------------------------------------------------------
 
 export interface DiscloseRangeWitnessArgs {
   /** keccak256(abi.encode(...)) mod r, from `disclosureContextHash` (§7.7). */
@@ -195,7 +195,7 @@ export interface DiscloseRangeWitnessArgs {
   hi: bigint;
 }
 
-/** Range disclosure (§6 C4), off-chain only. */
+/** Range disclosure (§6), off-chain only. */
 export function buildDiscloseRangeWitness(a: DiscloseRangeWitnessArgs): Witness {
   if (!mul(a.pk, a.s).equals(H)) bad('s * pk != H');
   if (a.lo > a.value || a.value > a.hi) bad('value outside [lo, hi]');

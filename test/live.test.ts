@@ -72,7 +72,7 @@ function fakeChain(over: ChainOverrides = {}) {
     async multicall({ blockNumber }: { blockNumber: bigint }) {
       calls.multicall++;
       assert.equal(blockNumber, HEAD, 'reads must be pinned to one block');
-      // The R3 drill: the public RPC returned -32602 for reads at a block one replica had not seen.
+      // A load test on the public RPC returned -32602 for reads at a block one replica had not seen.
       // The assertion above doubles as "a retry stays on the same block".
       if (over.lagging && calls.multicall <= over.lagging) {
         return Array.from({ length: 5 }, () => ({ status: 'failure', error: new Error('Missing or invalid parameters') }));
@@ -473,4 +473,30 @@ test('registering proves dark_register and passes the derived key to the registr
 test('the constants the fallbacks lean on are the §5 ceilings', () => {
   assert.equal(HARD_MAX_TRANSFER, 2_500_000_000n);
   assert.ok(mul(G, 0n).equals(Point.ZERO));
+});
+
+test('a recipient key is encrypted to only when two independent RPC sources agree on it', async () => {
+  const build = (keyCheckClient: unknown) => {
+    const f = fakeChain();
+    return LiveDarkClient.create({
+      chainId: CHAIN_ID, account: ACCOUNT, privateKey: SK, prover: new FixtureDarkProver(),
+      publicClient: f.pub as never, walletClient: f.wallet as never, keyCheckClient: keyCheckClient as never,
+    }).then((c) => ({ c, ...f }));
+  };
+  // The second source hands back a different key (the primary could be the liar just as well):
+  // refuse before anything is encrypted, proven or sent.
+  const lying = await build({ readContract: async () => keys.publicKey });
+  await assert.rejects(lying.c.transfer(PEER, 1_000000n), (e: unknown) => isDarkError(e) && e.code === 'RPC_DISAGREEMENT');
+  assert.equal(lying.calls.write, 0);
+  // A second source that says "unregistered" is a disagreement too, not a fallback to one source.
+  const silent = await build({ readContract: async () => { throw new Error('execution reverted: NotRegistered'); } });
+  await assert.rejects(silent.c.transfer(PEER, 1_000000n), (e: unknown) => isDarkError(e) && e.code === 'RPC_DISAGREEMENT');
+  // An unreachable second source fails closed (retryable), never open.
+  const down = await build({ readContract: async () => { throw new Error('fetch failed'); } });
+  await assert.rejects(down.c.transfer(PEER, 1_000000n), (e: unknown) => isDarkError(e) && e.code === 'STALE_STATE');
+  assert.equal(down.calls.write, 0);
+  // Agreement: the transfer proceeds exactly as before.
+  const honest = await build({ readContract: async () => peerKeys.publicKey });
+  await honest.c.transfer(PEER, 1_000000n);
+  assert.equal(honest.calls.write, 1);
 });

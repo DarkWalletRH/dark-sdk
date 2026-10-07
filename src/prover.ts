@@ -57,7 +57,7 @@ async function node(): Promise<NodeApi> {
 let tmpCounter = 0;
 
 /**
- * CI / SmokeDark prover (§7): `nargo execute` for the witness, `bb prove` for the proof, with the
+ * Native prover (§7): `nargo execute` for the witness, `bb prove` for the proof, with the
  * flags circuits/tools/build.mjs proves work against the deployed verifiers.
  *
  * It never trusts the proof's own public inputs: it re-derives all of them from the witness via
@@ -237,7 +237,7 @@ function findCircuits(fs: typeof import('node:fs'), path: typeof import('node:pa
   }
 }
 
-/** bb writes the wire public inputs as 32-byte big-endian words (§19 X2). */
+/** bb writes the wire public inputs as 32-byte big-endian words (§19). */
 function words(buf: Uint8Array): Hex[] {
   if (buf.length % 32 !== 0) {
     throw new DarkError('PUBLIC_INPUT_MISMATCH', `public_inputs is ${buf.length} bytes, not a multiple of 32`);

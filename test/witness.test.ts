@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 import { GROUP_N, G, H, mul } from '../src/grumpkin.ts';
 import { encrypt } from '../src/elgamal.ts';
 import {
@@ -16,13 +16,13 @@ import { isDarkError } from '../src/errors.ts';
 import {
   cases, CHAIN_ID, REGISTRY, VAULT, SENDER, RECIPIENT, WITHDRAW_TO, NONCE,
   MIN_TRANSFER, MAX_TRANSFER, BALANCE, AMOUNT, WITHDRAW_AMOUNT,
-  senderKeys, recipientKeys, availRho, avail, r, ct, noCircuits,
+  senderKeys, recipientKeys, availRho, avail, r, ct, CIRCUITS, noCircuits,
 } from './scenario.ts';
 
 // --- the committed prover files ------------------------------------------------------------
 /** Flatten a Prover.toml into name -> bigint, with points as `name.x` / `name.y`. */
 function readProverToml(crate: string): Map<string, bigint> {
-  const text = readFileSync(fileURLToPath(new URL(`../../../circuits/${crate}/Prover.toml`, import.meta.url)), 'utf8');
+  const text = readFileSync(join(CIRCUITS, crate, 'Prover.toml'), 'utf8');
   const out = new Map<string, bigint>();
   let table = '';
   for (const raw of text.split('\n')) {

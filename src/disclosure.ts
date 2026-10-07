@@ -137,8 +137,9 @@ export type DisclosureComponent = 'available' | 'total';
 export const isRangeKind = (kind: DisclosureKind): boolean => kind.endsWith('_range');
 
 /**
- * The context-hash preimage members (§18b). Every one of them is also a `DarkDisclosureV2` field, which is
- * what lets the viewer rebuild this from the document alone and catch a tampered `contextHash`.
+ * The context-hash preimage members (§18b). Every one of them is also a `DarkDisclosureV2` field,
+ * which is what lets the viewer rebuild this from the document alone and catch a tampered
+ * `contextHash`.
  */
 export interface DisclosureContext {
   chainId: number;
@@ -178,7 +179,7 @@ const CONTEXT_ABI = [
 
 /**
  * keccak256(abi.encode(...)) mod r, the `context_hash` public input of `dark_disclose_range`
- * and the field the DLEQ challenge commits to. §18b W1: one fixed tuple, always all 19 members,
+ * and the field the DLEQ challenge commits to. §18b: one fixed tuple, always all 19 members,
  * absent optionals encoding as "" / 0 / the zero address / bytes32(0), and a single-block kind
  * repeating its block in both slots.
  */
@@ -201,7 +202,7 @@ export interface JsonPoint {
 }
 
 /**
- * §7.7 step 5. v2: the document carries every W1 context member (`id`, `role`, `direction`,
+ * §7.7 step 5. v2: the document carries every disclosure-context member (`id`, `role`, `direction`,
  * `counterparty` were missing in v1, so the viewer could not rebuild `contextHash` and had to
  * take the document's word for it).
  */
@@ -230,7 +231,7 @@ export interface DarkDisclosureV2 {
   label: string;
   createdAt: number;
   expiresAt: number;
-  /** The disclosure id, also the blob's AAD and the last-but-one W1 member. */
+  /** The disclosure id, also the blob's AAD and the last-but-one disclosure-context member. */
   id: string;
   ownerSig?: Hex | undefined;
 }
@@ -336,7 +337,7 @@ export const fromBase64url = (s: string): Uint8Array => {
 };
 
 /**
- * Plaintext frames (§18b W11). AEAD is length-preserving, so an unpadded blob's size tracks the
+ * Plaintext frames (§18b). AEAD is length-preserving, so an unpadded blob's size tracks the
  * JCS length, which tracks the number of digits in the amount -- and the API, the CDN and anyone
  * watching the response store exactly that. Framing leaves one
  * of three sizes: every balance document fits the first, the larger two exist for Honk proofs.
@@ -413,7 +414,7 @@ export function parseDisclosureLink(url: string): { id: string; key: Uint8Array 
 // --- build + verify ----------------------------------------------------------------------------
 
 export interface BuildDisclosureArgs {
-  /** Carries the registry and the label too: every W1 member lives here (§18b). */
+  /** Carries the registry and the label too: every disclosure-context member lives here (§18b). */
   context: DisclosureContext;
   /** The account's registered key and the ciphertext the claim is about. */
   pk: Pt;
@@ -468,8 +469,8 @@ const KINDS: DisclosureKind[] =
 const MAX_BLOCK = 1n << 64n;
 
 /**
- * The W1 context rebuilt from the document alone (§7.8 step 4). This is the whole point of v2:
- * the viewer holds nothing but the link, so unless every preimage member is a document field it
+ * The disclosure context rebuilt from the document alone (§7.8 step 4). This is the whole point of
+ * v2: the viewer holds nothing but the link, so unless every preimage member is a document field it
  * cannot recompute `contextHash` and has to trust it -- which made `expiresAt`, `kind`,
  * `component`, the block range and `label` forgeable by anyone holding the link.
  *
@@ -477,8 +478,8 @@ const MAX_BLOCK = 1n << 64n;
  */
 export function contextFromDocument(doc: DarkDisclosureV2): DisclosureContext {
   if (!KINDS.includes(doc.kind)) throw new Error(`unknown kind ${JSON.stringify(doc.kind)}`);
-  // The enum members encode as `string` in the W1 tuple, so an unknown value would rebuild
-  // consistently and reach the viewer as text to render. Pin them to their sets.
+  // The enum members encode as `string` in the disclosure-context tuple, so an unknown value would
+  // rebuild consistently and reach the viewer as text to render. Pin them to their sets.
   const oneOf = (v: unknown, name: string, set: readonly string[]) => {
     if (v !== undefined && !set.includes(v as string)) throw new Error(`unknown ${name} ${JSON.stringify(v)}`);
   };
@@ -502,16 +503,8 @@ export function contextFromDocument(doc: DarkDisclosureV2): DisclosureContext {
     : undefined;
   if (blockRange && blockRange[0] > blockRange[1]) throw new Error('blockRange is inverted');
 
-  // The claim's SHAPE must match the kind, and must be exactly one shape.
-  //
-  // Everything downstream branched on which keys were present rather than on the kind, and the
-  // branches disagreed: this one preferred `value`, the range verifier preferred `lo`/`hi`, and the
-  // viewer's rendering preferred `value` again. A claim carrying BOTH therefore had its contextHash
-  // built from `value` while the proof was checked against `lo`/`hi` — and since `context_hash` is a
-  // free public input to the circuit, an honest range proof over a real ciphertext (lo = 0,
-  // hi = 2^48 - 1, true of any balance) satisfied it. The owner signs it themselves, pk/c/d are
-  // genuinely theirs, so every other check passed and a stranger was shown "Verified — balance was
-  // 1,000,000 USDG" for an account holding 5. Found by red-team review, with a working PoC.
+  // The claim's SHAPE must match the kind exactly: { value } for exact kinds, { lo, hi } for range
+  // kinds, never both. contextHash and the range proof must commit to the same fields.
   const hasValue = 'value' in doc.claim;
   const hasRange = 'lo' in doc.claim || 'hi' in doc.claim;
   const wantsRange = isRangeKind(doc.kind);
@@ -622,8 +615,8 @@ async function verify(a: VerifyDisclosureArgs): Promise<VerifyDisclosureResult> 
   const now = a.now ?? Math.floor(Date.now() / 1000);
   if (doc.expiresAt <= now) return { verdict: 'expired' };
 
-  // A JS caller can still omit what TypeScript marks required, and omitting it used to yield
-  // `verified` on a document made up from nothing.
+  // A JS caller can omit what TypeScript marks required; without the chain reads there is nothing
+  // to verify against, so this is invalid.
   if (!a.onChain || !a.registryKey) {
     return no('the viewer must supply the on-chain ciphertext and the registry key');
   }
@@ -648,7 +641,7 @@ async function verify(a: VerifyDisclosureArgs): Promise<VerifyDisclosureResult> 
       a.onChain.d.x !== want.d.x || a.onChain.d.y !== want.d.y) {
     return no('the document\'s ciphertext is not the one on chain at that block');
   }
-  // rebuild the context-hash preimage from the document rather than trusting the field.
+  // rebuild the context-hash preimage from the document; never trust the field.
   // Everything the viewer renders -- the kind, the component, the block, the expiry, the label --
   // is only as trustworthy as this comparison, because the DLEQ binds nothing but contextHash.
   const rebuilt = hex32(disclosureContextHash(contextFromDocument(doc)));
@@ -700,7 +693,13 @@ function pointOrIdentity(p: JsonPoint): Pt {
   return decode(a);
 }
 
-/** §7.7 step 8: testnet ids start with `t_`. */
+/**
+ * §7.7 step 8: testnet ids start with `t_`. A mainnet id is redrawn until it does not, so the viewer
+ * (which routes `t_…` links to the testnet API) can never send a mainnet link to the wrong network.
+ */
 export function newDisclosureId(chainId: number, rand: Uint8Array = crypto.getRandomValues(new Uint8Array(12))): string {
-  return `${chainId === 4663 ? '' : 't_'}${base64url(rand)}`;
+  if (chainId !== 4663) return `t_${base64url(rand)}`;
+  let body = base64url(rand);
+  while (body.startsWith('t_')) body = base64url(crypto.getRandomValues(new Uint8Array(12)));
+  return body;
 }

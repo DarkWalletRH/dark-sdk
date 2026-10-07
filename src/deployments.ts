@@ -3,7 +3,7 @@ import type { Hex } from './prover.ts';
 
 export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as const;
 
-/** §13 item 5: the notice state is one constant per chain. */
+/** §13: the notice state is one constant per chain. */
 export type BetaNoticeState = 'pre_audit' | 'in_audit' | 'audited';
 
 export interface Deployment {
@@ -41,9 +41,9 @@ export const CHAIN_ID_TESTNET = 46630;
 export const deployments: Record<number, Deployment> = {
   [CHAIN_ID_TESTNET]: {
     ...UNDEPLOYED,
-    // Hardened deployment of 2026-09-20: carries the review's pending-count lower
-    // bound and the MIT OR Apache-2.0 headers; verifiers unchanged since v0. MockUSDG is the testnet
-    // asset (§14.14); owner is the timelock, guardian is the deployer EOA until Safes land (§14.36).
+    // Hardened deployment of 2026-09-20: carries the pending-count lower bound and the MIT OR
+    // Apache-2.0 headers; verifiers unchanged since v0. MockUSDG is the testnet asset (§14.14);
+    // owner is the timelock, guardian is the deployer EOA (§14.36).
     vault: '0x14fa77C25357C1Dc7de0DD7F36e0EbE807110aB7',
     registry: '0x850907E912c5F89B233252E3633BEfaBe66232B2',
     verifiers: {
@@ -56,7 +56,7 @@ export const deployments: Record<number, Deployment> = {
     usdg: '0x77FfdE2D07f08f847944B6951dDd9243ae5EE950',
     deployBlock: 122104964n,
     rpcUrl: 'https://rpc.testnet.chain.robinhood.com',
-    explorer: 'https://explorer.testnet.chain.robinhood.com', // testnet.explorer.… serves no TLS; this host answers the Blockscout v2 API (2026-09-20 sweep),
+    explorer: 'https://explorer.testnet.chain.robinhood.com', // testnet.explorer.… serves no TLS; this host answers the Blockscout v2 API
     betaNoticeState: 'pre_audit',
   },
   [CHAIN_ID_MAINNET]: {
@@ -75,19 +75,18 @@ export const deployments: Record<number, Deployment> = {
     // 0xD1A9…2305, 2-of-3), guardian = the guardian Safe (1-of-2).
     usdg: '0x5fc5360D0400a0Fd4f2af552ADD042D716F1d168',
     rpcUrl: 'https://rpc.mainnet.chain.robinhood.com',
-    explorer: 'https://robinhoodchain.blockscout.com', // explorer.mainnet.chain.robinhood.com 301s here; explorer.chain.robinhood.com serves no TLS (2026-09-20 sweep),
+    explorer: 'https://robinhoodchain.blockscout.com', // explorer.mainnet.chain.robinhood.com 301s here; explorer.chain.robinhood.com serves no TLS
     betaNoticeState: 'pre_audit',
   },
 };
 
-/** True once the vault and registry for `chainId` are non-zero (§7.1 `not_deployed`). */
+/** True once the vault and registry for `chainId` are non-zero. */
 export function isDeployed(chainId: number): boolean {
   const d = deployments[chainId];
   return !!d && d.vault !== ZERO_ADDRESS && d.registry !== ZERO_ADDRESS;
 }
 
-// --- Draft ABIs (§6.5). Functions and events only; regenerated from the Foundry
-// artifacts once contracts land, so treat these as the interface, not the truth. ---
+// --- Vault and registry ABIs (§6.5): functions and events only. ---
 
 export const darkKeyRegistryAbi = [
   {

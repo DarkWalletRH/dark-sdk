@@ -343,8 +343,8 @@ test('a malformed document is a verdict, never a thrown exception', async () => 
   assert.equal(await verdict({ contextHash: 'not-hex' }), 'invalid');
   assert.equal(await verdict({ ownerSig: '0x1234' }), 'invalid');
   assert.equal(await verdict({ claim: {} }), 'invalid');
-  // The enum members encode as `string` in W1, so an unknown value would rebuild consistently
-  // and land in the viewer as text to render.
+  // The enum members encode as `string` in the disclosure-context tuple, so an unknown value would
+  // rebuild consistently and land in the viewer as text to render.
   assert.equal(await verdict({ component: 'whatever' as 'total' }), 'invalid');
   assert.equal(await verdict({ role: 'auditor' as 'sender' }), 'invalid');
   assert.equal(await verdict({ direction: 'sideways' as 'in' }), 'invalid');
@@ -399,7 +399,7 @@ async function rangeDoc(lo: bigint, hi: bigint): Promise<DarkDisclosureV2> {
   return signDisclosure(edited, (td) => account.signTypedData(td));
 }
 
-test('a range kind needs a bb.js verifier and gets the §6 C4 public inputs in order', async () => {
+test('a range kind needs a bb.js verifier and gets the §6 public inputs in order', async () => {
   const doc = await rangeDoc(1n, 2n);
   const now = VECTORS.context.createdAt;
   assert.equal((await verifyDisclosure({ doc, ...chainRead(), now })).verdict, 'invalid');
@@ -495,13 +495,9 @@ test('the SDK-side invariants the disclosure rests on still hold', () => {
   assert.ok(decode(encode(G)).equals(G));
 });
 
-test('a claim cannot carry both value and lo/hi (red-team: false exact balance shown as Verified)', () => {
-  // The attack: kind `balance_range` with claim {value: 1_000_000 USDG, lo: 0, hi: 2^48-1}.
-  // contextFromDocument preferred `value`, so contextHash was built from the huge figure; the range
-  // path preferred `lo`/`hi`, so the PROOF only had to show 0 <= balance <= 2^48-1, which is true of
-  // any balance. `context_hash` is a free public input, so that proof verified. The owner signs the
-  // document themselves and pk/c/d are genuinely theirs, so every other check passed — and the
-  // viewer, also branching on `value`, told a stranger the balance was 1,000,000 USDG.
+test('a claim cannot carry both value and lo/hi', () => {
+  // contextHash and the range proof must commit to the same fields: the claim is { value } for exact
+  // kinds and { lo, hi } for range kinds, never both.
   const base = {
     v: 2, chainId: 46630,
     vault: '0x00000000000000000000000000000000000000fa', // any address: contextFromDocument does not check pins
@@ -528,4 +524,13 @@ test('a claim cannot carry both value and lo/hi (red-team: false exact balance s
   // The honest shapes still work.
   assert.doesNotThrow(() => contextFromDocument({ ...base, claim: { lo: '0', hi: '9' } } as never));
   assert.doesNotThrow(() => contextFromDocument({ ...base, kind: 'balance_exact', claim: { value: '5' } } as never));
+});
+
+test('a mainnet id is redrawn when the random bytes would spell t_', () => {
+  // base64url('\xb7\xf0…') starts with "t_": 't' is index 45 (101101), '_' is 63 (111111).
+  const unlucky = Uint8Array.from([0xb7, 0xf0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+  assert.match(newDisclosureId(46630, unlucky), /^t_t_/);
+  const id = newDisclosureId(4663, unlucky);
+  assert.doesNotMatch(id, /^t_/);
+  assert.match(id, /^[A-Za-z0-9_-]{16}$/);
 });

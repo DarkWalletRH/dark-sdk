@@ -43,7 +43,7 @@ import {
 } from '../src/hint.ts';
 
 const CHAIN = 46630;
-// Not a deployment: any address works here, and a real one reads as live config (2026-09-20 sweep).
+// Not a deployment: any address works here, and a real one reads as live config.
 const VAULT = '0x00000000000000000000000000000000000000fa';
 const FROM = '0x000000000000000000000000000000000000beef';
 const TO = '0x000000000000000000000000000000000000cafe';

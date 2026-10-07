@@ -44,7 +44,7 @@ The package is consumed from source. Installing from the repository builds `dist
 Pin a release tag:
 
 ```bash
-npm install github:DarkWalletRH/dark-sdk#v0.4.1 viem
+npm install github:DarkWalletRH/dark-sdk#v0.4.2 viem
 ```
 
 ### Peer dependencies
@@ -159,7 +159,8 @@ addresses for every Dark client. `isDeployed(chainId)` gates every live flow.
 
 | Version | Changes |
 |---|---|
-| **0.4.1** (latest) | Documentation and test hygiene. Tests that cross-check the Noir workspace skip when it is absent, so the suite runs standalone. No API or protocol changes. |
+| **0.4.2** (latest) | Security: `transfer()` cross-checks the recipient key against a second RPC source before encrypting to it (new error `RPC_DISAGREEMENT`; options `keyCheckRpcUrl` / `keyCheckClient`). `newDisclosureId` never produces a mainnet id that looks like a testnet one. |
+| 0.4.1 | Documentation and test hygiene. Tests that cross-check the Noir workspace skip when it is absent, so the suite runs standalone. No API or protocol changes. |
 | 0.4.0 | Adds the Robinhood Chain mainnet deployment (chain `4663`) to `deployments`. No API changes. |
 | 0.3.2 | First release in this repository. Testnet deployment only; on 0.3.2, `isDeployed(4663)` is `false`. |
 
@@ -183,6 +184,11 @@ alone. A change that alters a vector changes the protocol. Tests that need `narg
 Noir workspace from [dark-contracts], skip automatically when those are not available. In 0.3.2 and
 0.4.0, the eight Noir-workspace cross-checks fail instead of skipping in a standalone checkout; every
 other test passes. From 0.4.1 they skip.
+
+## Specification references
+
+Comments of the form `§n` cite sections of the DARK-CB-1 protocol specification, which is published
+with the audit report; the code is complete without it.
 
 ## Status
 

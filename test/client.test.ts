@@ -337,9 +337,8 @@ test('importRevokeTokens is all-or-nothing and never echoes a token', () => {
 });
 
 test('the revoke-token hash matches what the API stores', async () => {
-  // The SDK hashed the DECODED bytes while the server hashes the hex TEXT, so every digest
-  // disagreed and revoking from the device that made a link always 404'd — leaving the link live
-  // with no way to take it down. The smoke test missed it by hashing the server's way.
+  // The token is hashed as hex TEXT, as the API stores it, not as the decoded bytes: a digest that
+  // disagrees with the server's leaves a link live with no way to take it down.
   const { createHash } = await import('node:crypto');
   const token = 'ab'.repeat(32);
 

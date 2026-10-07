@@ -7,9 +7,16 @@ import {
   buildRegisterWitness, buildTransferWitness, buildWithdrawWitness, buildDiscloseRangeWitness,
 } from '../src/witness.ts';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-/** The circuits/ workspace sits beside this package in the monorepo; a standalone checkout has none. */
-export const noCircuits = existsSync(new URL('../../../circuits/Nargo.toml', import.meta.url)) ? false : 'circuits/ workspace not present';
+/**
+ * The Noir workspace from dark-contracts: $DARK_CIRCUITS_DIR, else `circuits/` at its default
+ * location relative to this package.
+ */
+export const CIRCUITS = process.env.DARK_CIRCUITS_DIR ?? fileURLToPath(new URL('../../../circuits/', import.meta.url));
+/** A standalone checkout has no workspace; the cross-checks against the circuits skip without one. */
+export const noCircuits = existsSync(join(CIRCUITS, 'Nargo.toml')) ? false : 'circuits/ workspace not present; set DARK_CIRCUITS_DIR';
 
 // --- gen_prover.mjs's scenario, reproduced ------------------------------------------------
 const CHAIN_ID = 46630;

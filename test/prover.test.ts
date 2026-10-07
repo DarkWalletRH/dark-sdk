@@ -1,11 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { NodeDarkProver, FixtureDarkProver } from '../src/prover.ts';
 import { buildPublicInputs } from '../src/publicInputs.ts';
 import { buildRegisterWitness } from '../src/witness.ts';
 import { deriveDarkKeys } from '../src/keys.ts';
-import { cases, noCircuits } from './scenario.ts';
+import { cases, CIRCUITS, noCircuits } from './scenario.ts';
 import { deployments, isDeployed, darkVaultAbi, darkKeyRegistryAbi, ZERO_ADDRESS } from '../src/deployments.ts';
 
 const CHAIN_ID = 46630;
@@ -21,8 +22,8 @@ const registerWitness = buildRegisterWitness({
 const prover = new NodeDarkProver();
 const toolchain = await prover.isAvailable();
 
-// nargo + bb are a ~1 GB toolchain; CI has them, a laptop checkout may not.
-test('NodeDarkProver proves dark_register and re-derives its public inputs', { skip: toolchain ? false : 'nargo/bb not on this machine', timeout: 600_000 }, async () => {
+// nargo + bb are a ~1 GB toolchain, and a checkout may not have them or the Noir workspace.
+test('NodeDarkProver proves dark_register and re-derives its public inputs', { skip: toolchain ? false : 'nargo/bb or the Noir workspace not available', timeout: 600_000 }, async () => {
   const seen: number[] = [];
   const r = await prover.prove('dark_register', registerWitness, (f) => seen.push(f));
   assert.ok(r.proof.length > 1000, `proof is ${r.proof.length} B`);
@@ -49,7 +50,7 @@ test('a missing toolchain or workspace is PROVER_UNAVAILABLE, never a silent pas
   );
 });
 
-test('every circuit proves, with the wire public-input count §6 measured', { skip: toolchain ? false : 'nargo/bb not on this machine', timeout: 600_000 }, async () => {
+test('every circuit proves, with the wire public-input count §6 measured', { skip: toolchain ? false : 'nargo/bb or the Noir workspace not available', timeout: 600_000 }, async () => {
   const want = { register: 5, transfer: 21, withdraw: 12, disclose_range: 9 };
   for (const [crate, witness] of Object.entries(cases)) {
     const circuit = `dark_${crate}` as 'dark_register';
@@ -59,8 +60,8 @@ test('every circuit proves, with the wire public-input count §6 measured', { sk
   }
 });
 
-test('the prove run leaves no files behind in the circuits workspace', { skip: toolchain ? false : 'nargo/bb not on this machine', timeout: 600_000 }, async () => {
-  const dir = new URL('../../../circuits/register/', import.meta.url);
+test('the prove run leaves no files behind in the circuits workspace', { skip: toolchain ? false : 'nargo/bb or the Noir workspace not available', timeout: 600_000 }, async () => {
+  const dir = join(CIRCUITS, 'register');
   const before = readdirSync(dir);
   await prover.prove('dark_register', registerWitness);
   assert.deepEqual(readdirSync(dir).sort(), before.sort());
@@ -95,7 +96,7 @@ test('testnet and mainnet (launch, 2026-09-28) are deployed; nothing else is', (
   assert.equal(deployments[4663].betaNoticeState, 'pre_audit');
 });
 
-test('draft ABIs carry the §6.5 owner functions and post-state events', () => {
+test('the ABIs carry the §6.5 owner functions and post-state events', () => {
   const names = new Set(darkVaultAbi.map((e) => e.name));
   for (const n of ['deposit', 'applyPending', 'transfer', 'withdraw', 'getAccount', 'caps', 'tvl']) {
     assert.ok(names.has(n), n);

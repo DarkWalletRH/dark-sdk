@@ -13,8 +13,7 @@ import { DarkError } from './errors.ts';
 /**
  * Preserve a thrown error's own code. `checkRegistryKey` throws a plain Error carrying
  * `code: 'KEY_DERIVATION_MISMATCH'` — the §11 terminal hard stop — and rewrapping everything as
- * DECRYPTION_FAILED told the user the wrong thing about the one error they must not ignore
- *.
+ * DECRYPTION_FAILED told the user the wrong thing about the one error they must not ignore.
  */
 function asDarkError(e: unknown): DarkError {
   if (e instanceof DarkError) return e;

@@ -535,6 +535,14 @@ export interface LiveDarkClientOptions {
   bsgsTableBits?: number;
   /** Required only for the disclosure methods; everything else works without it. */
   api?: DarkApi;
+  /**
+   * Second source for recipient keys, which `transfer()` cross-checks before encrypting to one
+   * (§6.3): the chain's public RPC when `rpcUrl` points anywhere else, otherwise Dark's relay when
+   * `api` is set. `null` disables the check — for tests and single-RPC dev setups only.
+   */
+  keyCheckRpcUrl?: string | null;
+  /** A ready client for the same purpose (tests); takes precedence over `keyCheckRpcUrl`. */
+  keyCheckClient?: PublicClient | null;
 }
 
 const point = (p: { x: bigint; y: bigint }) => (p.x === 0n && p.y === 0n ? Point.ZERO : decode(p));
@@ -546,7 +554,7 @@ const ct = (c: { c: AffinePoint; d: AffinePoint }): Ciphertext => ({ c: point(c.
 /**
  * §2, read off the ciphertext rather than reconstructed from history: the balance is public exactly
  * when `available.D` is the identity (a deposit-only ciphertext `(v·G, identity)` that anyone can
- * BSGS) and nothing is pending. It used to track only a *received* transfer (§18b W8, now corrected),
+ * BSGS) and nothing is pending. It used to track only a *received* transfer (§18b),
  * so an account that had sent privately still reported a public balance, even though the new
  * ciphertext carries the transfer's randomness and nobody can compute it. The disclosure viewer
  * already judged `public_balance` from `D = identity`; the two now agree. As a bonus this needs no
@@ -579,6 +587,7 @@ export class LiveDarkClient {
   /** id → revoke token, kept by the device that created the link (§7.7 step 9). */
   private readonly revokeTokens = new Map<string, string>();
   private pub!: PublicClient;
+  private keyCheck: PublicClient | null = null;
   private wallet?: WalletClient;
   private status: DarkStatus = 'idle';
 
@@ -629,6 +638,11 @@ export class LiveDarkClient {
     // reads back as unregistered / stale. Read-after-write is the normal case here.
     c.pub = (opts.publicClient
       ?? createPublicClient({ chain, cacheTime: 0, transport: http(c.rpcUrl(opts.rpcUrl)) })) as PublicClient;
+    if (opts.keyCheckClient !== undefined) c.keyCheck = opts.keyCheckClient;
+    else {
+      const second = opts.keyCheckRpcUrl === undefined ? c.secondRpcUrl(opts.rpcUrl) : opts.keyCheckRpcUrl;
+      c.keyCheck = second ? (createPublicClient({ chain, cacheTime: 0, transport: http(second) }) as PublicClient) : null;
+    }
     if (opts.walletClient) c.wallet = opts.walletClient;
     else if (opts.privateKey) {
       const { privateKeyToAccount } = await import('viem/accounts');
@@ -640,6 +654,12 @@ export class LiveDarkClient {
 
   private rpcUrl(given?: string): string {
     return given ?? process.env?.DARK_RPC_URL ?? this.deployment.rpcUrl;
+  }
+
+  /** The independent source for recipient keys (see `transfer()`), or null when there is none. */
+  private secondRpcUrl(given?: string): string | null {
+    if (this.rpcUrl(given) !== this.deployment.rpcUrl) return this.deployment.rpcUrl;
+    return this.api ? `${this.api.baseUrl.replace(/\/$/, '')}/v1/rpc` : null;
   }
 
   get betaNotice(): BetaNoticeState {
@@ -735,8 +755,8 @@ export class LiveDarkClient {
     ] as const;
 
     // Retried at the SAME block when we chose the block ourselves: a load-balanced RPC can hand out a
-    // head from one replica and route the reads to another that has not seen it yet (the R3 drill hit
-    // exactly this on the public endpoint). Same block, so the "one block" semantics hold; a
+    // head from one replica and route the reads to another that has not seen it yet (a load test on
+    // the public RPC hit exactly this). Same block, so the "one block" semantics hold; a
     // caller-pinned block that does not exist is a real error and is not retried. Only the reads are
     // retried — the key-derivation hard stop below them never is.
     const results = await this.readPinned(calls, block, blockNumber === undefined);
@@ -1085,6 +1105,19 @@ export class LiveDarkClient {
 
     const recipientKey = await this.keyOf(to, s.block);
     if (!recipientKey) throw new DarkError('RECIPIENT_NOT_REGISTERED', `${to} has no registered key`);
+    // The recipient key decides who can read the amount and the note, so one RPC's word is not
+    // enough: an RPC that answered with its own key would receive a hint it can open, and the vault
+    // would reject the transfer only after that hint had been built and handed to it. A second,
+    // independent source must return the same key (register-once, so `latest` is exact).
+    if (this.keyCheck) {
+      const second = await this.keyOfVia(this.keyCheck, to);
+      if (!second || second.x !== recipientKey.x || second.y !== recipientKey.y) {
+        throw new DarkError(
+          'RPC_DISAGREEMENT',
+          'the two RPC sources disagree about the recipient key; nothing was encrypted or sent',
+        );
+      }
+    }
     if (amount < s.caps.minTransfer || amount > s.caps.maxTransfer || amount >= MAX_AMOUNT) {
       throw new DarkError('AMOUNT_OUT_OF_RANGE', 'transfer outside [minTransfer, maxTransfer]');
     }
@@ -1167,8 +1200,12 @@ export class LiveDarkClient {
    * `sync()` report a registered account as unregistered, inviting a pointless re-register.
    */
   async keyOf(who: Address, blockNumber?: bigint): Promise<AffinePoint | null> {
+    return this.keyOfVia(this.pub, who, blockNumber);
+  }
+
+  private async keyOfVia(client: PublicClient, who: Address, blockNumber?: bigint): Promise<AffinePoint | null> {
     try {
-      return (await this.pub.readContract({
+      return (await client.readContract({
         address: this.deployment.registry as Address,
         abi: darkKeyRegistryAbi,
         functionName: 'keyOf',
@@ -1464,12 +1501,12 @@ export const toHex32Prefixed = (b: Uint8Array): string => `0x${toHex32(b)}`;
 const toHex32 = (b: Uint8Array) => [...b].map((x) => x.toString(16).padStart(2, '0')).join('');
 
 /**
- * sha256 of the token's HEX TEXT — the same bytes `src/routes/disclosures.ts` hashes.
+ * sha256 of the token's HEX TEXT — the same bytes the Dark API hashes.
  *
  * This hashed the decoded bytes instead, so every revoke-token digest disagreed with the server's
  * and revoking from the device that made the link always 404'd, leaving the link live with no way
  * to take it down. `@noble/hashes` rather than `crypto.subtle` because Hermes, which the
- * app runs on, has no WebCrypto (H1's sibling, M12).
+ * app runs on, has no WebCrypto.
  */
 function sha256Hex(tokenHex: string): string {
   return bytesToHex(sha256(utf8ToBytes(tokenHex)));
@@ -1478,7 +1515,7 @@ function sha256Hex(tokenHex: string): string {
 export const MAX_CHUNK_DEPTH = 12; // 4,096 sub-ranges; deeper means the endpoint is refusing for another reason
 const RATE_LIMIT_RETRIES = 3;
 const RATE_LIMIT_BACKOFF_MS = [250, 750, 2_000];
-// R3 drill on the public RPC: getBlockNumber answered from a replica that had the block, the reads
+// A load test on the public RPC: getBlockNumber answered from a replica that had the block, the reads
 // went to one that did not yet ("Missing or invalid parameters"). It catches up within a second.
 const RPC_LAG_RETRIES = 3;
 const RPC_LAG_BACKOFF_MS = [250, 500, 1_000];
