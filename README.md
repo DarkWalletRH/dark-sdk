@@ -188,8 +188,8 @@ other test passes. From 0.4.1 they skip.
 
 ## Specification references
 
-Comments of the form `§n` cite sections of the DARK-CB-1 protocol specification, which is published
-with the audit report; the code is complete without it.
+Comments of the form `§n` cite sections of the DARK-CB-1 protocol specification, published in the
+contracts repository: [DARK-CB-1.md](https://github.com/DarkWalletRH/dark-contracts/blob/main/docs/DARK-CB-1.md).
 
 ## Status
 
