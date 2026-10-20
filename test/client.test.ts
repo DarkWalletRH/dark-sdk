@@ -320,6 +320,19 @@ test('a revoke token restored after a restart still revokes the link', async () 
   assert.deepEqual(after.exportRevokeTokens(), {}, 'a revoked link drops its token');
 });
 
+test('a token in the form createDisclosure mints survives export and import', () => {
+  // createDisclosure stores toHex32(32 random bytes): 64 hex characters, no 0x prefix.
+  const minted = 'ab'.repeat(32);
+  const before = liveForRevoke();
+  (before as unknown as { revokeTokens: Map<string, string> }).revokeTokens.set(RT_ID, minted);
+  const saved = before.exportRevokeTokens();
+  assert.deepEqual(saved, { [RT_ID]: minted });
+
+  const after = liveForRevoke();
+  after.importRevokeTokens(saved);
+  assert.deepEqual(after.exportRevokeTokens(), { [RT_ID]: minted }, 'the token is restored unchanged');
+});
+
 test('importRevokeTokens is all-or-nothing and never echoes a token', () => {
   const c = liveForRevoke();
   assert.throws(() => c.importRevokeTokens({ [RT_ID]: RT_TOKEN, 'not-an-id': RT_TOKEN }), TypeError);
