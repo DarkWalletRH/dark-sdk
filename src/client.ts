@@ -1474,7 +1474,10 @@ export class LiveDarkClient {
     for (const [id, token] of entries) {
       if (!REVOKE_ID_RE.test(id)) throw new TypeError(`importRevokeTokens: not a disclosure id: ${JSON.stringify(id).slice(0, 40)}`);
       // Never echo the token itself: this message can end up in a crash report.
-      if (typeof token !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(token)) {
+      // `createDisclosure` mints the token as 64 hex characters with no `0x` (that text is what
+      // `revokeTokenHash` hashes), so that is what `exportRevokeTokens` returns and must be accepted
+      // here; the `0x`-prefixed form is accepted too.
+      if (typeof token !== 'string' || !/^(0x)?[0-9a-fA-F]{64}$/.test(token)) {
         throw new TypeError(`importRevokeTokens: the token for ${id} is not 32 bytes of hex`);
       }
     }
