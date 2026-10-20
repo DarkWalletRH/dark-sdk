@@ -45,6 +45,18 @@ test('deposit enforces the caps', async () => {
   await assert.rejects(c.deposit(3_000_000_000n), (e: Error & { code?: string }) => e.code === 'CAP_EXCEEDED');
 });
 
+test('withdrawing received funds does not lift the account inflow cap', async () => {
+  // DarkVault.withdraw floors netInflow at 0, so the inflow cap (10,000 USDG here) still bounds
+  // later deposits after an account withdraws a transfer it received.
+  const c = newClient();
+  await c.register();
+  c.receiveFixtureTransfer(BOB, 2_500_000_000n);
+  await c.applyPending();
+  await c.withdraw(2_500_000_000n);
+  for (let i = 0; i < 4; i++) await c.deposit(2_500_000_000n);
+  await assert.rejects(c.deposit(1_000_000n), (e: Error & { code?: string }) => e.code === 'CAP_EXCEEDED');
+});
+
 test('actions before register throw NOT_REGISTERED', async () => {
   const c = newClient();
   await assert.rejects(c.deposit(2_000_000n), (e: Error & { code?: string }) => e.code === 'NOT_REGISTERED');

@@ -348,7 +348,9 @@ export class DarkClient {
     if (amount > available) throw new DarkError('INSUFFICIENT_BALANCE', 'available balance too low');
     const tx = await this.run('withdraw', 'dark_withdraw', onProgress);
     this.available -= amount;
-    this.netInflow -= amount;
+    // DarkVault.withdraw: netInflow = max(0, netInflow - amount). Withdrawing received funds must not
+    // drive it negative, or the fixture accepts deposits past maxAccountInflow that the vault refuses.
+    this.netInflow = amount >= this.netInflow ? 0n : this.netInflow - amount;
     this.tvlValue -= amount;
     this.bump();
     this.entries.push({
