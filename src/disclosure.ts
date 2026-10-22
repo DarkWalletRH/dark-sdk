@@ -429,6 +429,7 @@ export interface BuildDisclosureArgs {
 /** An unsigned `DarkDisclosureV2` for an exact kind, with its DLEQ proof (§7.7 steps 3-5). */
 export function buildExactDisclosure(a: BuildDisclosureArgs): DarkDisclosureV2 {
   const c = a.context;
+  if (isRangeKind(c.kind)) throw new DarkError('AMOUNT_OUT_OF_RANGE', `${c.kind} is a range kind; use rangeDisclosure`);
   if (c.label.length > 64) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'label longer than 64 chars');
   if (c.lo !== a.value || c.hi !== a.value) {
     throw new DarkError('AMOUNT_OUT_OF_RANGE', 'an exact claim must set context lo = hi = value');
@@ -437,6 +438,29 @@ export function buildExactDisclosure(a: BuildDisclosureArgs): DarkDisclosureV2 {
   const st: DleqStatement = {
     P: a.pk, C: a.ciphertext.c, D: a.ciphertext.d, v: a.value, context: toBytes32(contextHash),
   };
+  return documentOf(
+    c, a.pk, a.ciphertext, { value: a.value.toString(10) },
+    toHexBytes(dleqToBytes(dleqProve(st, a.s, a.rand))), contextHash,
+  );
+}
+
+/** The largest `hi` the range circuit takes (2^48 - 1), so "at least X" is the range [X, RANGE_MAX]. */
+export const RANGE_MAX = MAX_AMOUNT - 1n;
+
+/**
+ * An unsigned `DarkDisclosureV2` for a range kind. The Honk proof comes from the caller's prover over
+ * `buildDiscloseRangeWitness` with this context's hash: the SDK cannot make one without a prover.
+ */
+export function rangeDisclosure(c: DisclosureContext, pk: Pt, ciphertext: { c: Pt; d: Pt }, proof: Hex): DarkDisclosureV2 {
+  if (!isRangeKind(c.kind)) throw new DarkError('AMOUNT_OUT_OF_RANGE', `${c.kind} is not a range kind`);
+  if (c.label.length > 64) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'label longer than 64 chars');
+  if (c.lo > c.hi || c.hi > RANGE_MAX) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'range bounds out of order or over 2^48');
+  return documentOf(c, pk, ciphertext, { lo: c.lo.toString(10), hi: c.hi.toString(10) }, proof, disclosureContextHash(c));
+}
+
+function documentOf(
+  c: DisclosureContext, pk: Pt, ct: { c: Pt; d: Pt }, claim: DarkDisclosureV2['claim'], proof: Hex, contextHash: bigint,
+): DarkDisclosureV2 {
   return {
     v: 2,
     chainId: c.chainId,
@@ -451,17 +475,48 @@ export function buildExactDisclosure(a: BuildDisclosureArgs): DarkDisclosureV2 {
     role: c.role,
     direction: c.direction,
     counterparty: c.counterparty,
-    pk: jsonPoint(a.pk),
-    c: jsonPoint(a.ciphertext.c),
-    d: jsonPoint(a.ciphertext.d),
-    claim: { value: a.value.toString(10) },
-    proof: toHexBytes(dleqToBytes(dleqProve(st, a.s, a.rand))),
+    pk: jsonPoint(pk),
+    c: jsonPoint(ct.c),
+    d: jsonPoint(ct.d),
+    claim,
+    proof,
     contextHash: hex32(contextHash),
     label: c.label,
     createdAt: c.createdAt,
     expiresAt: c.expiresAt,
     id: c.id,
   };
+}
+
+// --- flow totals ---------------------------------------------------------------------------------
+
+/** The widest blockRange a flow document may cover: ~13 months of mainnet at ~9.6 blocks/s. */
+export const FLOW_MAX_SPAN = 330_000_000n;
+/**
+ * The most payments one flow document may sum. With each amount < 2^48 the true total stays below
+ * 2^59, far under the group order, so a total that matches mod n is the total.
+ */
+export const FLOW_MAX_PAYMENTS = 2_000;
+
+/**
+ * The homomorphic sum a flow kind is about: every matching `ConfidentialTransfer.transferCt`
+ * ([C.x, C.y, Ds.x, Ds.y, Dr.x, Dr.y]) added up under one party's key. `out` pairs C with the
+ * sender's handle Ds, `in` with the recipient's Dr; either way C - s*D = (sum of amounts)*G. Each
+ * point must decode (on curve, canonical, not the identity); the sum itself may be the identity,
+ * which encodes as (0,0) like any stored ciphertext.
+ */
+export function sumFlow(
+  transferCts: readonly (readonly bigint[])[], direction: 'in' | 'out',
+): { c: AffinePoint; d: AffinePoint } {
+  const k = direction === 'out' ? 2 : 4;
+  let c: Pt = Point.ZERO;
+  let d: Pt = Point.ZERO;
+  for (const t of transferCts) {
+    if (t.length !== 6) throw new Error('transferCt must have 6 coordinates');
+    c = add(c, decode({ x: t[0]!, y: t[1]! }));
+    d = add(d, decode({ x: t[k]!, y: t[k + 1]! }));
+  }
+  return { c: encode(c), d: encode(d) };
 }
 
 const KINDS: DisclosureKind[] =
@@ -502,6 +557,22 @@ export function contextFromDocument(doc: DarkDisclosureV2): DisclosureContext {
         numeral(doc.blockRange[1], 'blockRange[1]', MAX_BLOCK)] as [bigint, bigint])
     : undefined;
   if (blockRange && blockRange[0] > blockRange[1]) throw new Error('blockRange is inverted');
+  // A flow kind's set of payments is (account, direction, counterparty or anyone, blockRange), read
+  // by the viewer from chain logs; the single-block fields mean nothing there. And the flow fields
+  // mean nothing on a balance, so they may not ride along on one either.
+  if (isFlow) {
+    if (doc.direction === undefined) throw new Error('a flow kind needs a direction');
+    if (doc.component !== undefined || doc.txHash !== undefined || doc.role !== undefined) {
+      throw new Error('a flow kind carries no component, txHash or role');
+    }
+    if (doc.counterparty !== undefined &&
+        (!/^0x[0-9a-fA-F]{40}$/.test(doc.counterparty) || BigInt(doc.counterparty) === 0n)) {
+      throw new Error('counterparty is not a non-zero address; leave it out to mean anyone');
+    }
+    if (blockRange![1] - blockRange![0] + 1n > FLOW_MAX_SPAN) throw new Error('blockRange is wider than FLOW_MAX_SPAN');
+  } else if (doc.direction !== undefined || doc.counterparty !== undefined) {
+    throw new Error(`${doc.kind} carries no direction or counterparty`);
+  }
 
   // The claim's SHAPE must match the kind exactly: { value } for exact kinds, { lo, hi } for range
   // kinds, never both. contextHash and the range proof must commit to the same fields.

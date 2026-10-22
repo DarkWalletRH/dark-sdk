@@ -11,7 +11,7 @@
 [![ESM only](https://img.shields.io/badge/module-ESM-informational?style=flat-square)](package.json)
 [![Node](https://img.shields.io/badge/node-%E2%89%A522-339933?style=flat-square&logo=node.js&logoColor=white)](.github/workflows/ci.yml)
 [![CI](https://img.shields.io/github/actions/workflow/status/DarkWalletRH/dark-sdk/ci.yml?branch=main&style=flat-square&label=CI)](.github/workflows/ci.yml)
-[![Status: pre-audit](https://img.shields.io/badge/status-pre--audit-orange?style=flat-square)](#status)
+[![Security review: vault by Shieldify, circuits pending](https://img.shields.io/badge/security%20review-vault%20by%20Shieldify%20%C2%B7%20circuits%20pending-yellowgreen?style=flat-square)](#status)
 
 [Website](https://darkwallet.cash) · [Whitepaper](https://darkwallet.cash/whitepaper) · [Docs](https://darkwallet.cash/docs) · [Contracts](https://github.com/DarkWalletRH/dark-contracts) · [Exit tool](https://github.com/DarkWalletRH/dark-exit) · [Starter template](https://github.com/DarkWalletRH/Darkwallet)
 
@@ -193,7 +193,9 @@ contracts repository: [DARK-CB-1.md](https://github.com/DarkWalletRH/dark-contra
 
 ## Status
 
-The SDK and the contracts it targets are **pre-audit**. Do not rely on them to secure funds you
+[Shieldify](https://shieldify.org) reviewed the deployed vault contract in October 2026 and reported
+nine informational findings, nothing of Low severity or above ([report](https://github.com/shieldify-security/audits-portfolio/blob/main/reports/DarkWallet-Security-Review.pdf)). The zero-knowledge
+circuits and proof verifiers were not part of that review and have not had an external audit yet. The SDK itself has not been externally audited. Do not rely on it to secure funds you
 cannot afford to lose. Dark enforces deposit, transfer and total-value caps on-chain during the
 beta.
 

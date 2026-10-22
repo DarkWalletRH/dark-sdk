@@ -96,7 +96,7 @@ export interface DarkClientOptions {
   /** secp256k1 private key. Fixture mode derives the same keys the real client would. */
   privateKey?: Uint8Array | Hex;
   prover?: DarkProver;
-  onAction?: (e: ActionEvent) => void;
+  onAction?: ((e: ActionEvent) => void) | undefined;
   /** Fixture only: starting available balance in micro-USDG. */
   initialAvailable?: bigint;
 }
@@ -154,7 +154,7 @@ export class DarkClient {
   readonly prover: DarkProver;
 
   private status: DarkStatus;
-  private readonly onAction?: (e: ActionEvent) => void;
+  private readonly onAction?: ((e: ActionEvent) => void) | undefined;
 
   // Fixture state. In live mode all of this comes from getAccount/caps/tvl.
   private registered = false;
@@ -481,7 +481,7 @@ import {
 } from './hint.ts';
 import { buildPublicInputs, assertPublicInputsEqual } from './publicInputs.ts';
 import {
-  buildRegisterWitness, buildTransferWitness, buildWithdrawWitness, type Witness,
+  buildRegisterWitness, buildTransferWitness, buildWithdrawWitness, buildDiscloseRangeWitness, type Witness,
 } from './witness.ts';
 import { darkVaultAbi, darkKeyRegistryAbi } from './deployments.ts';
 
@@ -534,7 +534,7 @@ export interface LiveDarkClientOptions {
   publicClient?: PublicClient;
   /** Pass `null` to skip Multicall3 and read each call pinned to the same block instead. */
   multicallAddress?: Address | null;
-  onAction?: (e: ActionEvent) => void;
+  onAction?: ((e: ActionEvent) => void) | undefined;
   /** BSGS memory cap; 2^20 entries by default (§7 step 5). */
   bsgsTableBits?: number;
   /** Required only for the disclosure methods; everything else works without it. */
@@ -607,7 +607,7 @@ export class LiveDarkClient {
   readonly prover: DarkProver;
   readonly deployment: Deployment;
 
-  private readonly onAction?: (e: ActionEvent) => void;
+  private readonly onAction?: ((e: ActionEvent) => void) | undefined;
   private readonly bsgsTableBits: number;
   private readonly multicallAddress: Address | null;
   private readonly api?: DarkApi;
@@ -917,27 +917,78 @@ export class LiveDarkClient {
   }
 
   /** One incoming transfer's amount: the hint, verified; else BSGS under that block's cap. */
-  private async amountFromIncoming(log: DecodedLog, s: Snapshot): Promise<bigint> {
+  private amountFromIncoming(log: DecodedLog, s: Snapshot): Promise<bigint> {
+    return this.amountOf(log, 'in', () => this.maxTransferAt(log.blockNumber ?? s.block));
+  }
+
+  /**
+   * One transfer's amount from this account's side of it: `out` opens the sender hint against Ds,
+   * `in` the recipient hint against Dr. A hint is believed only once a*G == C - s*D; otherwise BSGS
+   * bounded by `capAt(block)`, the maxTransfer in force at that block (§7 step 5), never the current one.
+   */
+  private async amountOf(
+    log: DecodedLog, dir: 'in' | 'out', capAt: (block: bigint) => bigint | Promise<bigint>,
+  ): Promise<bigint> {
     const a = log.args as {
-      from: Address; to: Address; fromNonceAfter: bigint; transferCt: readonly bigint[]; hint: Hex;
+      from: Address; to: Address; fromNonceAfter: bigint; transferCt: readonly bigint[]; hint: Hex; senderHint: Hex;
     };
+    const k = dir === 'out' ? 2 : 4;
     const C = point({ x: a.transferCt[0], y: a.transferCt[1] });
-    const Dr = point({ x: a.transferCt[4], y: a.transferCt[5] });
-    const target = decryptToPoint(C, Dr, this.keys.s);
+    const D = point({ x: a.transferCt[k], y: a.transferCt[k + 1] });
+    const target = decryptToPoint(C, D, this.keys.s);
     const tctx = {
       chainId: this.chainId, vault: this.deployment.vault, from: a.from, to: a.to,
       // The event carries the post-state nonce; the hint was built against the pre-state one.
       fromNonce: a.fromNonceAfter - 1n,
     };
-    const opened = openHint(hexBytes(a.hint), this.keys.s, tctx);
+    const opened = dir === 'out'
+      ? openSenderHint(this.keys.kAe, hexBytes(a.senderHint), tctx)
+      : openHint(hexBytes(a.hint), this.keys.s, tctx);
     if (opened && mul(G, opened.amount).equals(target)) return opened.amount;
-    // §7 step 5: bound by the maxTransfer in force at that transfer's block, not the current one.
-    const bound = await this.maxTransferAt(log.blockNumber ?? s.block);
-    const found = discreteLog(target, bound, this.bsgsTableBits);
+    const found = discreteLog(target, await capAt(log.blockNumber ?? 0n), this.bsgsTableBits);
     if (found === null) {
-      throw new DarkError('DECRYPTION_FAILED', 'an incoming transfer did not open under its block\'s maxTransfer');
+      throw new DarkError('DECRYPTION_FAILED', `${dir === 'in' ? 'an incoming' : 'an outgoing'} transfer did not open under its block's maxTransfer`);
     }
     return found;
+  }
+
+  /**
+   * The total of every `ConfidentialTransfer` this account sent (`out`) or received (`in`) in the
+   * inclusive block range, with one counterparty or with anyone, and the homomorphic sum (c, d)
+   * a flow disclosure is about. Every amount must open, or nothing is returned: a total that is
+   * quietly short would be proved as the truth. Local only: nothing leaves the device.
+   */
+  async flowTotal(q: FlowQuery): Promise<FlowTotal> {
+    const d = await import('./disclosure.ts');
+    const fromBlock = q.fromBlock > this.deployment.deployBlock ? q.fromBlock : this.deployment.deployBlock;
+    const head = await this.pub.getBlockNumber();
+    if (fromBlock > q.toBlock || q.toBlock > head) {
+      throw new DarkError('AMOUNT_OUT_OF_RANGE', 'the block range is empty or ends past the chain head');
+    }
+    if (q.toBlock - fromBlock + 1n > d.FLOW_MAX_SPAN) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'the block range is too wide');
+    const cp = q.counterparty;
+    const filter = q.direction === 'out'
+      ? { from: this.account, ...(cp ? { to: cp } : {}) }
+      : { to: this.account, ...(cp ? { from: cp } : {}) };
+    const logs = await this.logsFor('ConfidentialTransfer', filter, fromBlock, q.toBlock);
+    if (logs.length > d.FLOW_MAX_PAYMENTS) {
+      throw new DarkError('AMOUNT_OUT_OF_RANGE', `more than ${d.FLOW_MAX_PAYMENTS} payments in that range`);
+    }
+    // One CapsUpdated read for the whole set, not one full-history scan per hint that will not open.
+    const caps = await this.logsFor('CapsUpdated', {}, this.deployment.deployBlock, q.toBlock);
+    const capAt = (block: bigint) => {
+      const last = caps.filter((l) => (l.blockNumber ?? 0n) <= block).at(-1);
+      return last ? capBsgsBound(BigInt((last.args as { newCaps: Caps }).newCaps.maxTransfer), HARD_MAX_TRANSFER) : HARD_MAX_TRANSFER;
+    };
+    let total = 0n;
+    for (const l of logs) total += await this.amountOf(l, q.direction, capAt);
+    const transferCts = logs.map((l) => (l.args as { transferCt: readonly bigint[] }).transferCt);
+    const sum = d.sumFlow(transferCts, q.direction);
+    if (!mul(G, total).equals(decryptToPoint(point(sum.c), point(sum.d), this.keys.s))) {
+      throw new DarkError('DECRYPTION_FAILED', 'the opened amounts do not add up to the summed ciphertext');
+    }
+    if (total >= MAX_AMOUNT) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'these payments total 2^48 or more');
+    return { count: logs.length, total, c: sum.c, d: sum.d, transferCts, fromBlock };
   }
 
   /** `amountFromIncoming`, with an amount that will not open as `null` (unknown), not a throw. */
@@ -1413,6 +1464,72 @@ export class LiveDarkClient {
         } as never),
     );
 
+    return this.storeDisclosure(doc);
+  }
+
+  /**
+   * A flow disclosure (§7.7): one proof that the payments in `flowTotal(q)` total exactly their sum,
+   * or at least `lo`. Only the total (or the range) is revealed; the viewer rebuilds the sum from the
+   * chain, so no payment can be left out or added. The document is verified here before it is stored,
+   * so a wallet bug cannot publish a link the viewer rejects.
+   */
+  async createFlowDisclosure(
+    q: FlowQuery & { claim: { exact: true } | { lo: bigint; hi?: bigint }; label: string; ttlDays: number },
+    onProgress?: ProgressFn,
+  ): Promise<Disclosure> {
+    if (q.label.length > 64) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'label longer than 64 chars');
+    if (q.ttlDays < 1 || q.ttlDays > 365) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'expiry outside 1..365 days');
+    if (!this.wallet) throw new DarkError('NOT_IMPLEMENTED', 'no walletClient: the document must be signed by the account');
+    const d = await import('./disclosure.ts');
+    const f = await this.flowTotal(q);
+    if (f.count === 0) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'no payments match');
+
+    const exact = 'exact' in q.claim;
+    const lo = exact ? f.total : (q.claim as { lo: bigint }).lo;
+    const hi = exact ? f.total : ((q.claim as { hi?: bigint }).hi ?? d.RANGE_MAX);
+    const now = Math.floor(Date.now() / 1000);
+    const context: import('./disclosure.ts').DisclosureContext = {
+      chainId: this.chainId, vault: this.deployment.vault, registry: this.deployment.registry,
+      account: this.account, kind: exact ? 'flow_total_exact' : 'flow_total_range',
+      blockRange: [f.fromBlock, q.toBlock], direction: q.direction, counterparty: q.counterparty,
+      lo, hi, createdAt: now, expiresAt: now + Math.round(q.ttlDays * 86_400), id: d.newDisclosureId(this.chainId),
+      label: q.label,
+    };
+    const ciphertext = { c: point(f.c), d: point(f.d) };
+    let unsigned: import('./disclosure.ts').DarkDisclosureV2;
+    if (exact) {
+      unsigned = d.buildExactDisclosure({ context, pk: this.keys.P, ciphertext, value: f.total, s: this.keys.s });
+    } else {
+      if (f.total < lo) throw new DarkError('INSUFFICIENT_BALANCE', 'these payments total less than the claimed floor');
+      if (f.total > hi) throw new DarkError('AMOUNT_OUT_OF_RANGE', 'these payments total more than the claimed ceiling');
+      const witness = buildDiscloseRangeWitness({
+        contextHash: d.disclosureContextHash(context), s: this.keys.s, value: f.total, pk: this.keys.P, ciphertext, lo, hi,
+      });
+      const expected = buildPublicInputs('dark_disclose_range', witness);
+      const result = await this.prover.prove('dark_disclose_range', witness, onProgress);
+      assertPublicInputsEqual('dark_disclose_range', result.publicInputs, expected);
+      unsigned = d.rangeDisclosure(context, this.keys.P, ciphertext, toHex(result.proof));
+    }
+    const doc = await d.signDisclosure(unsigned, (typedData) =>
+      this.wallet!.signTypedData({
+        ...(typedData as unknown as Record<string, unknown>),
+        account: this.wallet!.account,
+      } as never));
+    // The viewer's checks, run on this device first (contextFromDocument included). The range proof
+    // is the one just made and already matched against its public inputs, so it is not re-verified.
+    const self = await d.verifyDisclosure({
+      doc, onChain: { c: f.c, d: f.d }, registryKey: this.keys.publicKey, verifyRangeProof: async () => true,
+    });
+    if (self.verdict !== 'verified') {
+      throw new DarkError('DECRYPTION_FAILED', `the document did not check out on this device (${self.reason ?? self.verdict}); nothing was stored`);
+    }
+    return this.storeDisclosure(doc);
+  }
+
+  /** Seal under a fresh key, store only the ciphertext, and keep the revoke token on this device. */
+  private async storeDisclosure(doc: import('./disclosure.ts').DarkDisclosureV2): Promise<Disclosure> {
+    const d = await import('./disclosure.ts');
+    const { id, expiresAt, kind, label } = doc;
     const { blob, key } = d.sealDisclosure(doc, id);
     const revokeToken = toHex32(crypto.getRandomValues(new Uint8Array(32)));
     const res = await this.apiFetch('/v1/disclosures', {
@@ -1431,8 +1548,45 @@ export class LiveDarkClient {
     this.revokeTokens.set(id, revokeToken);
     return {
       id, kind, label, url: d.disclosureLink(id, key),
-      createdAt: now * 1000, expiresAt: expiresAt * 1000, revoked: false,
+      createdAt: doc.createdAt * 1000, expiresAt: expiresAt * 1000, revoked: false,
     };
+  }
+
+  /**
+   * Proof of Funds (S3): a signed `balance_range` document proving the available balance is at least
+   * `threshold`, made for one request. The request's id and label are disclosure-context members, so
+   * the proof answers that request and no other. Nothing is stored: the caller posts the document to
+   * the request, and the amount never leaves this device.
+   */
+  async proveFunds(
+    req: { id: string; label: string; threshold: bigint; expiresAt: number }, onProgress?: ProgressFn,
+  ): Promise<import('./disclosure.ts').DarkDisclosureV2> {
+    if (!this.wallet) throw new DarkError('NOT_IMPLEMENTED', 'no walletClient: the document must be signed by the account');
+    const d = await import('./disclosure.ts');
+    const s = await this.sync();
+    const value = (await this.getBalances(s)).available;
+    if (value < req.threshold) throw new DarkError('INSUFFICIENT_BALANCE', 'the private balance is below the amount asked for');
+    const context: import('./disclosure.ts').DisclosureContext = {
+      chainId: this.chainId, vault: this.deployment.vault, registry: this.deployment.registry,
+      account: this.account, kind: 'balance_range', component: 'available', block: s.block,
+      lo: req.threshold, hi: d.RANGE_MAX, createdAt: Math.floor(Date.now() / 1000), expiresAt: req.expiresAt,
+      id: req.id, label: req.label,
+    };
+    const witness = buildDiscloseRangeWitness({
+      contextHash: d.disclosureContextHash(context), s: this.keys.s, value, pk: this.keys.P,
+      ciphertext: s.account.available, lo: context.lo, hi: context.hi,
+    });
+    const expected = buildPublicInputs('dark_disclose_range', witness);
+    const result = await this.prover.prove('dark_disclose_range', witness, onProgress);
+    assertPublicInputsEqual('dark_disclose_range', result.publicInputs, expected);
+    return d.signDisclosure(
+      d.rangeDisclosure(context, this.keys.P, s.account.available, toHex(result.proof)),
+      (typedData) =>
+        this.wallet!.signTypedData({
+          ...(typedData as unknown as Record<string, unknown>),
+          account: this.wallet!.account,
+        } as never),
+    );
   }
 
   /**
@@ -1531,6 +1685,26 @@ export function capBsgsBound(bound: bigint, ceiling: bigint): bigint {
 
 interface DecodedLog extends Log {
   args?: unknown;
+}
+
+/** The payments a flow disclosure is about: one direction, one counterparty or anyone, inclusive blocks. */
+export interface FlowQuery {
+  direction: 'in' | 'out';
+  /** Absent means anyone. */
+  counterparty?: Address | undefined;
+  fromBlock: bigint;
+  toBlock: bigint;
+}
+
+export interface FlowTotal {
+  count: number;
+  total: bigint;
+  /** The homomorphic sum (`sumFlow`), encoded; (0,0) is the identity. */
+  c: AffinePoint;
+  d: AffinePoint;
+  transferCts: (readonly bigint[])[];
+  /** `fromBlock` clamped to the deployment's first block. */
+  fromBlock: bigint;
 }
 
 const RANGE_ERROR = /10,?000|too many|exceed|block range|query returned more|limit|range is too large/i;

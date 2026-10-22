@@ -378,3 +378,112 @@ test('a live client refuses a secret that belongs to another account', async () 
     (e: Error) => e instanceof Error,
   );
 });
+
+// --- flow disclosures: the total of a set of payments, proved once ---------------------------------
+
+const flow = await import('./flow-world.ts');
+const dsc = await import('../src/disclosure.ts');
+const { buildPublicInputs } = await import('../src/publicInputs.ts');
+const { ALICE: A, BOB: B, CAROL: C, B0, payment, flowClient } = flow;
+
+const toBob = [payment(A, B, 1_250_000n, B0 + 10n), payment(A, B, 3_000_000n, B0 + 20n), payment(A, B, 750_000n, B0 + 30n)];
+const world = [...toBob, payment(A, C, 9_000_000n, B0 + 25n), payment(B, A, 2_000_000n, B0 + 40n)];
+const B_TOTAL = 5_000_000n;
+const corrupt = (l: flow.PaymentLog) => ({ ...l, args: { ...l.args, senderHint: `0x${'ee'.repeat(176)}` as Hex } });
+const range = { fromBlock: 0n, toBlock: B0 + 100n };
+
+test('flowTotal sums one direction and counterparty, clamps to the deployment, and reads caps once', async () => {
+  // One hint that will not open: BSGS under the hard cap recovers it, without another caps scan.
+  const { client, seen } = flowClient(A, [corrupt(world[0]!), ...world.slice(1)]);
+  const f = await client.flowTotal({ direction: 'out', counterparty: B.address, ...range });
+  assert.equal(f.count, 3);
+  assert.equal(f.total, B_TOTAL);
+  assert.equal(f.fromBlock, B0);
+  assert.equal(seen.transfers[0]!.fromBlock, B0, 'the relay refuses a fromBlock before the deployment');
+  assert.equal(seen.caps, 1);
+  assert.deepEqual({ c: f.c, d: f.d }, dsc.sumFlow(toBob.map((l) => l.args.transferCt), 'out'));
+
+  assert.equal((await client.flowTotal({ direction: 'out', ...range })).total, B_TOTAL + 9_000_000n, 'anyone');
+  assert.equal((await client.flowTotal({ direction: 'in', ...range })).total, 2_000_000n);
+  assert.equal((await client.flowTotal({ direction: 'in', counterparty: C.address, ...range })).count, 0);
+  await assert.rejects(client.flowTotal({ direction: 'out', fromBlock: B0, toBlock: flow.HEAD + 1n }), (e: DarkError) => e.code === 'AMOUNT_OUT_OF_RANGE');
+  await assert.rejects(client.flowTotal({ direction: 'out', fromBlock: B0 + 5n, toBlock: B0 + 4n }), (e: DarkError) => e.code === 'AMOUNT_OUT_OF_RANGE');
+});
+
+test('flowTotal fails closed when an amount will not open', async () => {
+  // A cap of 1 makes the BSGS fallback fail, as it would for a garbage hint above the real cap.
+  const caps = [{ blockNumber: B0, args: { newCaps: { maxTransfer: 1n } } }];
+  const { client, seen } = flowClient(A, [corrupt(toBob[0]!), corrupt(toBob[1]!), toBob[2]!], { caps });
+  await assert.rejects(client.flowTotal({ direction: 'out', ...range }), (e: DarkError) => e.code === 'DECRYPTION_FAILED');
+  assert.equal(seen.caps, 1, 'CapsUpdated is read once for the whole set, not once per bad hint');
+});
+
+const openPosted = (seen: { posted: { id: string; blob: string }[] }, url: string) => {
+  const { id, key } = dsc.parseDisclosureLink(url);
+  return dsc.openDisclosure(dsc.fromBase64url(seen.posted[0]!.blob), key, id)!;
+};
+
+test('createFlowDisclosure: an exact total, stored only after it verifies here', async () => {
+  const { client, seen } = flowClient(A, world);
+  const made = await client.createFlowDisclosure({
+    direction: 'out', counterparty: B.address, ...range, claim: { exact: true }, label: 'Sent to @bob', ttlDays: 7,
+  });
+  assert.equal(made.kind, 'flow_total_exact');
+  assert.equal(seen.posted.length, 1);
+  const doc = openPosted(seen, made.url);
+  assert.deepEqual(doc.claim, { value: String(B_TOTAL) });
+  assert.deepEqual(doc.blockRange, [String(B0), String(B0 + 100n)]);
+  assert.equal(doc.direction, 'out');
+  assert.equal(doc.counterparty, B.address);
+  // The viewer's check, from the logs alone.
+  const onChain = dsc.sumFlow(toBob.map((l) => l.args.transferCt), 'out');
+  assert.equal((await dsc.verifyDisclosure({ doc, onChain, registryKey: A.keys.publicKey })).verdict, 'verified');
+  assert.equal((await dsc.verifyDisclosure({ doc, onChain: dsc.sumFlow(toBob.slice(1).map((l) => l.args.transferCt), 'out'), registryKey: A.keys.publicKey })).verdict, 'invalid');
+});
+
+test('createFlowDisclosure: "at least" goes through the range prover with the context-bound inputs', async () => {
+  const progress: number[] = [];
+  const prover = {
+    isAvailable: async () => true,
+    prove: async (circuit: 'dark_disclose_range', w: never, on?: (f: number) => void) => {
+      on?.(0.5);
+      return { proof: new Uint8Array([1, 2, 3]), publicInputs: buildPublicInputs(circuit, w), ms: 1 };
+    },
+  };
+  const { client, seen } = flowClient(B, world, { prover: prover as never });
+  const made = await client.createFlowDisclosure(
+    { direction: 'in', counterparty: A.address, ...range, claim: { lo: 4_000_000n }, label: 'from alice', ttlDays: 1 },
+    (f) => progress.push(f),
+  );
+  assert.equal(made.kind, 'flow_total_range');
+  assert.deepEqual(progress, [0.5]);
+  const doc = openPosted(seen, made.url);
+  assert.deepEqual(doc.claim, { lo: '4000000', hi: String(dsc.RANGE_MAX) });
+  assert.equal(doc.proof, '0x010203');
+});
+
+test('createFlowDisclosure refuses an empty set, a floor above the total, and a document that does not check out', async () => {
+  let proved = 0;
+  const prover = { isAvailable: async () => true, prove: async () => { proved++; throw new Error('unreachable'); } };
+  const w = flowClient(A, world, { prover: prover as never });
+  await assert.rejects(
+    w.client.createFlowDisclosure({ direction: 'in', counterparty: C.address, ...range, claim: { exact: true }, label: '', ttlDays: 1 }),
+    (e: DarkError) => e.code === 'AMOUNT_OUT_OF_RANGE' && /no payments match/.test(e.message),
+  );
+  await assert.rejects(
+    w.client.createFlowDisclosure({ direction: 'out', counterparty: B.address, ...range, claim: { lo: B_TOTAL + 1n }, label: '', ttlDays: 1 }),
+    (e: DarkError) => e.code === 'INSUFFICIENT_BALANCE',
+  );
+  assert.equal(proved, 0);
+
+  // A zero counterparty (an RPC that ignores the topic filter serves logs anyway): the document breaks
+  // the flow rules, and the self-check stops it before anything is stored.
+  const lying = flowClient(A, toBob, { ignoreFilter: true });
+  await assert.rejects(
+    lying.client.createFlowDisclosure({
+      direction: 'out', counterparty: '0x0000000000000000000000000000000000000000', ...range, claim: { exact: true }, label: '', ttlDays: 1,
+    }),
+    (e: DarkError) => e.code === 'DECRYPTION_FAILED' && /nothing was stored/.test(e.message),
+  );
+  assert.equal(w.seen.posted.length + lying.seen.posted.length, 0, 'nothing reaches the API');
+});

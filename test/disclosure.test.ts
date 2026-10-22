@@ -11,7 +11,7 @@ import {
   buildExactDisclosure, canonicalJson, contextFromDocument, disclosureContextHash, disclosureDigest, disclosureLink,
   dleqFromBytes, dleqProve, dleqToBytes, dleqVerify, jsonPoint, openDisclosure, parseDisclosureLink,
   sealDisclosure, signDisclosure, verifyDisclosure, newDisclosureId, disclosureTypedData,
-  DISCLOSURE_BLOB_MAX,
+  DISCLOSURE_BLOB_MAX, FLOW_MAX_SPAN, RANGE_MAX, sumFlow,
   type DarkDisclosureV2, type DisclosureContext,
 } from '../src/disclosure.ts';
 import { isDarkError } from '../src/errors.ts';
@@ -533,4 +533,105 @@ test('a mainnet id is redrawn when the random bytes would spell t_', () => {
   const id = newDisclosureId(4663, unlucky);
   assert.doesNotMatch(id, /^t_/);
   assert.match(id, /^[A-Za-z0-9_-]{16}$/);
+});
+
+// --- flow totals ------------------------------------------------------------------------------
+
+// Three payments from the vector's account (Ps) to a second one (Pr), as the vault logs them.
+const recipSk = `0x${'33'.repeat(32)}` as const;
+const recip = privateKeyToAccount(recipSk);
+const recipKeys = deriveDarkKeys(bytes(recipSk), CHAIN_ID);
+const AMOUNTS = [1_250_000n, 7_000_000n, 42_500_000n];
+const FLOW_TOTAL = AMOUNTS.reduce((a, b) => a + b);
+const logCt = (a: bigint, r: bigint): bigint[] => {
+  const e = encrypt(a, [keys.P, recipKeys.P], r);
+  return [e.C, e.D[0]!, e.D[1]!].flatMap((p) => { const q = encode(p); return [q.x, q.y]; });
+};
+const CTS = AMOUNTS.map((a, i) => logCt(a, 1000n + BigInt(i)));
+
+const flowCtx = (over: Partial<DisclosureContext> = {}): DisclosureContext => ({
+  ...ctx({ component: undefined, block: undefined }),
+  kind: 'flow_total_exact', blockRange: [100n, 200n], direction: 'out', counterparty: recip.address,
+  lo: FLOW_TOTAL, hi: FLOW_TOTAL, label: 'Sent to bob, October', ...over,
+});
+
+async function flowDoc(dir: 'in' | 'out', over: Partial<DisclosureContext> = {}): Promise<DarkDisclosureV2> {
+  const [k, signer] = dir === 'out' ? [keys, account] : [recipKeys, recip];
+  const sum = sumFlow(CTS, dir);
+  const unsigned = buildExactDisclosure({
+    context: flowCtx({ account: signer.address, direction: dir, counterparty: dir === 'out' ? recip.address : account.address, ...over }),
+    pk: k.P, ciphertext: { c: decode(sum.c), d: decode(sum.d) }, value: FLOW_TOTAL, s: k.s,
+  });
+  return signDisclosure(unsigned, (td) => signer.signTypedData(td));
+}
+
+test('a flow total verifies against the summed ciphertext under the right party\'s key, and only there', async () => {
+  const now = VECTORS.context.createdAt;
+  const out = await flowDoc('out');
+  const inc = await flowDoc('in');
+  const check = (doc: DarkDisclosureV2, cts: bigint[][], dir: 'in' | 'out', key: typeof keys.publicKey) =>
+    verifyDisclosure({ doc, onChain: sumFlow(cts, dir), registryKey: key, now }).then((r) => r.verdict);
+
+  assert.equal(await check(out, CTS, 'out', keys.publicKey), 'verified');
+  assert.equal(await check(inc, CTS, 'in', recipKeys.publicKey), 'verified');
+  // A payment left out of (or added to) the set the viewer reads changes the sum.
+  assert.equal(await check(out, CTS.slice(1), 'out', keys.publicKey), 'invalid');
+  assert.equal(await check(out, [...CTS, logCt(1n, 77n)], 'out', keys.publicKey), 'invalid');
+  // The other party's handle, or the other party's registered key.
+  assert.equal(await check(out, CTS, 'in', keys.publicKey), 'invalid');
+  assert.equal(await check(out, CTS, 'out', recipKeys.publicKey), 'invalid');
+  // A different total claimed over the same payments.
+  await assert.rejects(async () => buildExactDisclosure({
+    context: flowCtx({ lo: FLOW_TOTAL + 1n, hi: FLOW_TOTAL + 1n }),
+    pk: keys.P, ciphertext: { c: decode(sumFlow(CTS, 'out').c), d: decode(sumFlow(CTS, 'out').d) }, value: FLOW_TOTAL + 1n, s: keys.s,
+  }), /not the plaintext/);
+});
+
+test('sumFlow: sums may be the identity, and every point must decode', () => {
+  // A sender can pick r2 = n - r1 so the handles cancel: griefing, encoded as (0,0) like any stored ct.
+  const cancel = [logCt(5n, 99n), logCt(6n, GROUP_N - 99n)];
+  assert.deepEqual(sumFlow(cancel, 'out').d, { x: 0n, y: 0n });
+  assert.deepEqual(sumFlow(cancel, 'in').d, { x: 0n, y: 0n });
+  assert.deepEqual(sumFlow([], 'out'), { c: { x: 0n, y: 0n }, d: { x: 0n, y: 0n } });
+  assert.throws(() => sumFlow([[1n, 2n, 3n, 4n, 5n, 6n]], 'out'), /bad point/, 'off the curve');
+  assert.throws(() => sumFlow([[...CTS[0]!.slice(0, 4), 0n, 0n]], 'in'), /identity/);
+  assert.throws(() => sumFlow([CTS[0]!.slice(0, 4)], 'out'), /6 coordinates/);
+});
+
+test('flow documents carry exactly the flow fields, and other kinds carry none of them', async () => {
+  const doc = await flowDoc('out');
+  assert.doesNotThrow(() => contextFromDocument(doc));
+  assert.doesNotThrow(() => contextFromDocument({ ...doc, counterparty: undefined }), 'no counterparty means anyone');
+  const bad: [string, Partial<DarkDisclosureV2>, RegExp][] = [
+    ['no direction', { direction: undefined }, /needs a direction/],
+    ['a zero counterparty', { counterparty: '0x0000000000000000000000000000000000000000' }, /non-zero address/],
+    ['a junk counterparty', { counterparty: '0x1234' as never }, /non-zero address/],
+    ['a block', { block: '150' }, /never both/],
+    ['a component', { component: 'available' }, /no component/],
+    ['an inverted range', { blockRange: ['200', '100'] }, /inverted/],
+    ['a span over FLOW_MAX_SPAN', { blockRange: ['1', String(FLOW_MAX_SPAN + 1n)] }, /FLOW_MAX_SPAN/],
+  ];
+  for (const [what, over, re] of bad) {
+    assert.throws(() => contextFromDocument({ ...doc, ...over }), re, what);
+    // verify runs the rule before the contextHash rebuild, so the reason names the rule itself.
+    const r = await verifyDisclosure({ doc: { ...doc, ...over }, onChain: sumFlow(CTS, 'out'), registryKey: keys.publicKey, now: VECTORS.context.createdAt });
+    assert.equal(r.verdict, 'invalid', what);
+    assert.match(r.reason ?? '', re, what);
+  }
+  assert.doesNotThrow(() => contextFromDocument({ ...doc, blockRange: ['1', String(FLOW_MAX_SPAN)] }));
+
+  const balance = await signedDoc();
+  assert.throws(() => contextFromDocument({ ...balance, counterparty: recip.address }), /no direction or counterparty/);
+  assert.throws(() => contextFromDocument({ ...balance, direction: 'out' }), /no direction or counterparty/);
+  assert.throws(() => contextFromDocument({ ...balance, blockRange: ['1', '2'] }), /never both/);
+});
+
+test('buildExactDisclosure refuses a range kind', () => {
+  for (const kind of ['balance_range', 'flow_total_range'] as const) {
+    assert.throws(() => buildExactDisclosure({
+      context: kind === 'balance_range' ? ctx({ kind }) : flowCtx({ kind }),
+      pk: keys.P, ciphertext: stored, value: BigInt(VECTORS.value), s: keys.s,
+    }), /range kind/);
+  }
+  assert.ok(RANGE_MAX > FLOW_TOTAL);
 });
